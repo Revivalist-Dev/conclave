@@ -1,0 +1,14 @@
+{
+  "name": "brainstorm-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --cwd client/tauri dev",
+    "build": "bun run --cwd client/tauri build",
+    "web:dev": "bun run --cwd client/web dev",
+    "web:build": "bun run --cwd client/web build",
+    "orchestrator:dev": "bun run --cwd orchestrator dev",
+    "orchestrator:start": "bun run --cwd orchestrator start"
+  }
+}

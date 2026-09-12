@@ -1,0 +1,31 @@
+.DS_Store
+*.pyc
+.env
+node_modules/
+npm-debug.log*
+*.log
+logs/
+debug_logs/
+playwright-report/
+coverage/
+out/
+output/
+release/
+local/*
+
+data/
+api_sandbox
+
+# svelte / tauri
+target/
+crates/
+build/
+.svelte-kit
+
+# Agent / assistant working directories
+.playwright-cli/
+.zcode/
+.cursor/
+.codex/
+.opencode/
+.claude
