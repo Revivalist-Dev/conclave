@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { repos } from '../db';
 import { supervisor } from '../processes/supervisor';
+import { pluginManager } from '../plugins';
 
 export interface McpTool {
 	name: string;
@@ -33,7 +34,7 @@ export class LightweightMcpServer {
 	private rootDir: string;
 
 	constructor() {
-		this.rootDir = join(import.meta.dir, '../../../');
+		this.rootDir = process.env.BRAINSTORM_PROJECT_ROOT || process.cwd();
 		this.registerBuiltinTools();
 	}
 
@@ -86,7 +87,7 @@ export class LightweightMcpServer {
 		});
 	}
 
-	public handleJsonRpc(req: JsonRpcRequest): JsonRpcResponse {
+	public async handleJsonRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
 		const { id, method, params } = req;
 
 		switch (method) {
@@ -114,7 +115,7 @@ export class LightweightMcpServer {
 					jsonrpc: '2.0',
 					id,
 					result: {
-						tools: Array.from(this.tools.values())
+						tools: [...this.tools.values(), ...pluginManager.listMcpTools()]
 					}
 				};
 			}
@@ -122,6 +123,21 @@ export class LightweightMcpServer {
 			case 'tools/call': {
 				const toolName = params?.name;
 				const args = params?.arguments || {};
+				if (toolName.startsWith('plugin_')) {
+					try {
+						const result = await pluginManager.callTool(toolName, args);
+						return { jsonrpc: '2.0', id, result };
+					} catch (err: any) {
+						return {
+							jsonrpc: '2.0',
+							id,
+							result: {
+								content: [{ type: 'text', text: `Plugin tool failed: ${err.message}` }],
+								isError: true
+							}
+						};
+					}
+				}
 				return this.executeTool(id, toolName, args);
 			}
 
@@ -149,7 +165,7 @@ export class LightweightMcpServer {
 			case 'resources/read': {
 				const uri = params?.uri;
 				if (uri === 'brainstorm://db/stats') {
-					const convos = repos.getConversations();
+					const tabs = repos.getAllTabs();
 					return {
 						jsonrpc: '2.0',
 						id,
@@ -158,7 +174,7 @@ export class LightweightMcpServer {
 								{
 									uri,
 									mimeType: 'application/json',
-									text: JSON.stringify({ totalConversations: convos.length }, null, 2)
+									text: JSON.stringify({ totalConversations: tabs.length }, null, 2)
 								}
 							]
 						}

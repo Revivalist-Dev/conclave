@@ -18,6 +18,9 @@ export interface AppWindowState {
 	minimalist: WindowBounds;
 }
 
+export const IDLE_HUD_WIDTH = 300;
+export const IDLE_HUD_HEIGHT = 56;
+
 export const DEFAULT_FULL_BOUNDS: WindowBounds = {
 	width: 1240,
 	height: 820,
@@ -26,8 +29,8 @@ export const DEFAULT_FULL_BOUNDS: WindowBounds = {
 };
 
 export const DEFAULT_HUD_BOUNDS: WindowBounds = {
-	width: 240,
-	height: 70,
+	width: IDLE_HUD_WIDTH,
+	height: IDLE_HUD_HEIGHT,
 	x: 24,
 	y: 120
 };
@@ -56,7 +59,7 @@ export function isTauriEnvironment(): boolean {
 /**
  * Invoke a native Tauri command (handles both Tauri 2 and Tauri 1 conventions)
  */
-async function tauriInvoke<T>(command: string, args?: Record<string, any>): Promise<T | null> {
+export async function tauriInvoke<T>(command: string, args?: Record<string, any>): Promise<T | null> {
 	if (typeof window === 'undefined') return null;
 	const tauri = (window as any).__TAURI__;
 	try {
@@ -67,9 +70,59 @@ async function tauriInvoke<T>(command: string, args?: Record<string, any>): Prom
 			return await tauri.invoke(command, args);
 		}
 	} catch (err) {
-		console.warn(`[WindowManager] Tauri invoke '${command}' failed:`, err);
+		console.error(`[WindowManager] Tauri invoke '${command}' failed with args:`, args, err);
 	}
 	return null;
+}
+
+/**
+ * Emit a cross-window Tauri event
+ */
+export async function emitTauriEvent(event: string, payload?: any): Promise<void> {
+	if (typeof window === 'undefined') return;
+	const tauri = (window as any).__TAURI__;
+	try {
+		if (tauri?.event?.emit) {
+			await tauri.event.emit(event, payload);
+			return;
+		}
+	} catch (err) {
+		console.error(`[WindowManager] Tauri emit '${event}' failed:`, err);
+	}
+	// Browser event fallback
+	window.dispatchEvent(new CustomEvent(event, { detail: payload }));
+}
+
+/**
+ * Listen for a cross-window Tauri event
+ */
+export async function listenTauriEvent(event: string, handler: (payload: any) => void): Promise<() => void> {
+	if (typeof window === 'undefined') return () => {};
+	const tauri = (window as any).__TAURI__;
+	let unlisten: (() => void) | null = null;
+	try {
+		if (tauri?.event?.listen) {
+			unlisten = await tauri.event.listen(event, (evt: any) => {
+				handler(evt.payload);
+			});
+		}
+	} catch (err) {
+		console.error(`[WindowManager] Tauri listen '${event}' failed:`, err);
+	}
+
+	const customHandler = (e: Event) => {
+		handler((e as CustomEvent).detail);
+	};
+	window.addEventListener(event, customHandler);
+
+	return () => {
+		if (unlisten) {
+			try {
+				unlisten();
+			} catch {}
+		}
+		window.removeEventListener(event, customHandler);
+	};
 }
 
 /**
@@ -206,9 +259,9 @@ export async function enterMinimalistWindow(): Promise<void> {
  * Switch from Minimalist HUD mode back to Full Chat mode
  * Hides transparent overlay window, shows and focuses main desktop window
  */
-export async function exitMinimalistWindow(): Promise<void> {
+export async function exitMinimalistWindow(tabId?: string): Promise<void> {
 	try {
-		const res = await tauriInvoke<AppWindowState>('exit_overlay_mode');
+		const res = await tauriInvoke<AppWindowState>('exit_overlay_mode', { tabId, tab_id: tabId });
 		if (res) {
 			cachedState = { ...res };
 		}
@@ -225,19 +278,26 @@ export async function adjustHudSize(targetWidth: number, targetHeight: number): 
 }
 
 /**
- * Set the overlay window size using both native command and JS API
+ * Set the overlay window size using native command as single source of truth
  */
 export async function setOverlayWindowSize(width: number, height: number): Promise<void> {
-	await tauriInvoke('set_overlay_size', { width, height });
-	const win = getTauriWindow();
-	if (win) {
-		try {
-			const tauri = (window as any).__TAURI__;
-			if (tauri?.window?.LogicalSize) {
-				await win.setSize(new tauri.window.LogicalSize(width, height));
-			}
-		} catch (err) {
-			console.warn('[WindowManager] win.setSize error:', err);
+	const safeW = Math.max(IDLE_HUD_WIDTH, Math.round(width));
+	const safeH = Math.max(IDLE_HUD_HEIGHT, Math.round(height));
+	await tauriInvoke('set_overlay_size', { width: safeW, height: safeH });
+}
+
+/**
+ * Terminate the entire application process cleanly (kills both windows and background runner)
+ */
+export async function exitApp(): Promise<void> {
+	await tauriInvoke('exit_app');
+	if (typeof window !== 'undefined') {
+		const tauri = (window as any).__TAURI__;
+		if (tauri?.process?.exit) {
+			try {
+				await tauri.process.exit(0);
+			} catch {}
 		}
+		window.close();
 	}
 }

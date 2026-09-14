@@ -5,6 +5,10 @@
   "windows": ["main", "overlay"],
   "permissions": [
     "core:default",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to",
+    "core:event:allow-listen",
     "core:window:default",
     "core:window:allow-start-dragging",
     "core:window:allow-close",

@@ -76,6 +76,7 @@ export interface Conversation {
 	createdAt: number;
 	updatedAt: number;
 	starred?: boolean;
+	archived?: boolean;
 }
 
 export interface Provider {

@@ -513,3 +513,89 @@ function nextSeq(name: string): number {
 3. **End-to-End WebSocket Stream**: Verified prompts stream tokens from Docker port 8000 through port 4000 WebSocket to the Svelte UI in real time.
 4. **Session Continuity**: Multi-turn prompts reuse `session_id = chat-{timestamp}` to maintain context without data loss.
 5. **File Staging**: Verified file uploads via `POST /api/upload` persist to `api_sandbox/data` and stage in DanyAPI for multimodal question-answering.
+
+---
+
+## 11. Window Management, Multi-Monitor Safety & macOS Spaces Architecture
+
+brAInstorm utilizes a dual-window model in Tauri v2 coordinated with native macOS AppKit APIs for robust floating HUD operation:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ TAURI DESKTOP APPLICATION SHELL                                        │
+│                                                                        │
+│   ┌───────────────────────────┐      ┌───────────────────────────┐     │
+│   │ "main" WebviewWindow      │      │ "overlay" WebviewWindow   │     │
+│   │ Full desktop chat UI      │      │ Transparent HUD & Prompt  │     │
+│   │ Normal window level       │      │ NSFloatingWindowLevel     │     │
+│   │ TitleBarStyle: Overlay    │      │ Frameless, Transparent   │     │
+│   └─────────────┬─────────────┘      └─────────────┬─────────────┘     │
+│                 │                                  │                   │
+│                 ▼                                  ▼                   │
+│   ┌──────────────────────────────────────────────────────────────┐     │
+│   │ NATIVE PLATFORM INTEGRATIONS (macOS / AppKit via objc2)      │     │
+│   │                                                              │     │
+│   │ 1. NSWindowCollectionBehavior:                               │     │
+│   │    • CanJoinAllSpaces       : Follows across all Spaces     │     │
+│   │    • FullScreenAuxiliary    : Floats above fullscreen apps   │     │
+│   │    • IgnoresCycle           : Excluded from Cmd+Tab cycle   │     │
+│   │                                                              │     │
+│   │ 2. Multi-Monitor Coordinate Clamping:                        │     │
+│   │    • available_monitors() bounds validation                  │     │
+│   │    • Off-screen recovery (unplugged monitors fallback)       │     │
+│   │                                                              │     │
+│   │ 3. Native Move Persistence:                                  │     │
+│   │    • WindowEvent::Moved auto-persists to ~/.brainstorm.json  │     │
+│   │                                                              │     │
+│   │ 4. Lifecycle & Dock Reopen:                                  │     │
+│   │    • RunEvent::Reopen unhides main when clicking Dock icon   │     │
+│   │    • exit_app terminates all processes cleanly (no zombies) │     │
+│   └──────────────────────────────────────────────────────────────┘     │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.1 Multi-Monitor Clamping & Off-Screen Protection
+* When switching modes (`enter_overlay_mode`, `exit_overlay_mode`) or on app launch, target coordinates `(x, y)` from `~/.brainstorm.json` are validated against `app.available_monitors()`.
+* If a target position lands outside all active display viewports (e.g. secondary monitor was unplugged or arrangement changed), the window is clamped safely to the primary monitor (`x: mon_x + 24.0, y: mon_y + 100.0` for overlay).
+
+### 11.2 macOS Spaces & Fullscreen Integration
+* Regular always-on-top windows in macOS bind strictly to the virtual desktop (Space) where they were opened.
+* On macOS, brAInstorm configures the underlying `NSWindow` via `objc2`:
+  $$\text{CollectionBehavior} = \text{CanJoinAllSpaces } (1 \ll 0) \mid \text{FullScreenAuxiliary } (1 \ll 8) \mid \text{IgnoresCycle } (1 \ll 6)$$
+* This allows the floating brain HUD to remain visible across all virtual spaces, Mission Control, and fullscreen IDEs/browsers without vanishing.
+
+### 11.3 Window Move Tracking & Persistence
+* Native `WindowEvent::Moved` events captured in Tauri's event loop automatically update `state.minimalist.x/y` or `state.normal.x/y` and persist them to `~/.brainstorm.json`.
+* Both frontend layouts (`(desktop)/+layout.svelte` and `overlay/+page.svelte`) call `initWindowListeners()` to register window resize and move synchronization.
+
+### 11.4 Application Lifecycle & Dock Reopen
+* **Clean Termination**: The overlay's Quit command invokes native `exit_app` (`app.exit(0)`), ensuring the main window, overlay, and background supervisor processes terminate simultaneously with zero orphan/zombie processes.
+* **Dock Reopen Handler**: Listens for `tauri::RunEvent::Reopen`. If clicked in the macOS Dock while in minimalist mode or with no visible windows, it automatically unhides and focuses the main window.
+
+### 11.5 Cross-Window Event Bridge & Multi-Layer Thread Synchronization
+* **Cross-Window Handover**: When transitioning from the ambient overlay to the full desktop chat ("Open Chat" or "Restore Full Window"):
+  * `exit_overlay_mode(tab_id)` passes `tabId` directly into Rust.
+  * Rust native code shows and focuses the main window, then emits `main_win.emit("refresh-active-thread", { tabId })` directly from native code (bypassing webview permissions).
+  * The overlay emits Tauri cross-window events (`switch-tab`, `refresh-active-thread`) enabled by explicit `core:event:default`, `core:event:allow-emit`, `core:event:allow-listen` permissions in `capabilities/default.json`.
+  * The overlay updates `brainstorm_active_tab` and timestamp `brainstorm_refresh_ts` in shared `localStorage`.
+* **Multi-Event Desktop Triggers**: The main window (`(desktop)/+layout.svelte`) triggers `refreshActiveThread(tabId)` upon:
+  1. Native Rust `refresh-active-thread` event
+  2. Frontend Tauri `switch-tab` event
+  3. Browser `window.onstorage` event (cross-webview event on the shared origin)
+  4. Webview `window.onfocus` and `document.visibilitychange`
+* **Direct Dual-Fetch (HTTP + WebSocket)**:
+  * `harness.fetchTabMessages(tabId)` executes an immediate direct HTTP `fetch` to `http://127.0.0.1:4000/api/tabs/:id/messages` (direct Bun SQLite query, $\sim 2\text{ms}$ latency) followed by WebSocket state alignment.
+  * Ensures that messages generated in overlay mode are immediately retrieved into memory even before WebSocket handshake reconnects.
+* **Orchestrator Multi-Client Broadcasting**:
+  * The Bun orchestrator tracks all connected WebSocket clients (`connectedClients = new Set()`).
+  * Changes to tabs (`TAB_CREATED`, `TAB_RENAMED`, `TAB_DELETED`) and prompt completions (`TAB_UPDATED`) are broadcast to all connected webviews simultaneously.
+* **Svelte 5 Reactivity & Auto-Scroll**:
+  * `handleTabDetail` dynamically adds missing tabs, updates message arrays, and forces re-evaluation of Svelte 5 `$derived` state via `this.conversations = [...this.conversations]`.
+  * `ConversationView` monitors both active conversation ID and message counts, automatically scrolling the conversation container to the bottom so that newly generated overlay messages are immediately in view.
+
+### 11.6 Single-IPC Sizing & Rigid Idle Geometry
+* **Locked Idle Bounds**: The idle minimalist HUD dimensions are rigidly invariant at `200×56` px across Rust and TypeScript. Expanding states (`prompt`, `response`, `error`) never overwrite or drift the idle HUD geometry in `~/.brainstorm.json`.
+* **Deduplicated IPC**: Sizing operations route exclusively through the native `set_overlay_size` command, eliminating duplicate `win.setSize()` IPC roundtrips.
+* **RAF Throttling**: Grip resizing on the prompt box is throttled with `requestAnimationFrame`, preventing IPC flooding during pointer drag interactions.
+
+

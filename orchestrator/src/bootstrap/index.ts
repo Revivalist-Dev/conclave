@@ -20,23 +20,34 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 		console.error(`[Bootstrap] SQLite initialization failed: ${err.message}`);
 	}
 
-	// 2. Setup api_sandbox directory (root level: /api_sandbox)
-	let sandboxDir = join(import.meta.dir, '../../../api_sandbox');
-	if (!existsSync(sandboxDir)) {
-		const localSandbox = join(import.meta.dir, '../../api_sandbox');
-		if (existsSync(localSandbox)) {
-			sandboxDir = localSandbox;
-		} else {
-			mkdirSync(sandboxDir, { recursive: true });
+	// 2. Setup api_sandbox directory (root level: /api_sandbox).
+	// Production runs (BRAINSTORM_DATA_DIR set by the sidecar loader) skip the
+	// sandbox entirely: DanyAPI is a local Docker dev provider, and a shipped
+	// app must not git-clone repos or write into its read-only bundle.
+	const dataDir = process.env.BRAINSTORM_DATA_DIR;
+	let sandboxDir: string;
+	if (dataDir) {
+		sandboxDir = dataDir;
+	} else {
+		sandboxDir = join(import.meta.dir, '../../../api_sandbox');
+		if (!existsSync(sandboxDir)) {
+			const localSandbox = join(import.meta.dir, '../../api_sandbox');
+			if (existsSync(localSandbox)) {
+				sandboxDir = localSandbox;
+			} else {
+				mkdirSync(sandboxDir, { recursive: true });
+			}
 		}
 	}
 
-	// 3. Setup DanyAPI (Docker container for self-contained LLMs)
+	// 3. Setup DanyAPI (Docker container for self-contained LLMs) — dev only.
 	const danyDir = join(sandboxDir, 'DanyAPI');
 	let danyReady = false;
 	const danyRepo = 'https://github.com/mindflowgo/DanyAPI.git';
 
-	if (!existsSync(danyDir)) {
+	if (dataDir) {
+		console.log('[Bootstrap] Production run: skipping DanyAPI sandbox (local Docker provider disabled).');
+	} else if (!existsSync(danyDir)) {
 		console.log(`[Bootstrap] Ingesting DanyAPI repository from ${danyRepo}...`);
 		try {
 			const cloneResult = spawnSync('git', ['clone', '--depth', '1', danyRepo, danyDir], {
@@ -67,25 +78,27 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 		danyReady = true;
 	}
 
-	// Setup .env and docker-compose.yml for DanyAPI
-	const danyEnvFile = join(danyDir, '.env');
-	const danySettingsFile = join(sandboxDir, 'DanyAPI_settings');
+	// Setup .env and docker-compose.yml for DanyAPI — dev only
+	if (!dataDir) {
+		const danyEnvFile = join(danyDir, '.env');
+		const danySettingsFile = join(sandboxDir, 'DanyAPI_settings');
 
-	if (!existsSync(danyEnvFile)) {
-		if (existsSync(danySettingsFile)) {
-			try {
-				const settingsData = readFileSync(danySettingsFile, 'utf-8');
-				writeFileSync(danyEnvFile, settingsData, 'utf-8');
-				console.log(`[Bootstrap] Copied ${danySettingsFile} to ${danyEnvFile}`);
-			} catch {}
-		} else {
-			const defaultEnv = `# DanyAPI Environment Configuration
-DANYAPI_HOST=0.0.0.0
-DANYAPI_PORT=8000
-DEBUG=False
-`;
-			writeFileSync(danyEnvFile, defaultEnv, 'utf-8');
-			console.log(`[Bootstrap] Created default .env for DanyAPI at ${danyEnvFile}`);
+		if (!existsSync(danyEnvFile)) {
+			if (existsSync(danySettingsFile)) {
+				try {
+					const settingsData = readFileSync(danySettingsFile, 'utf-8');
+					writeFileSync(danyEnvFile, settingsData, 'utf-8');
+					console.log(`[Bootstrap] Copied ${danySettingsFile} to ${danyEnvFile}`);
+				} catch {}
+			} else {
+				const defaultEnv = `# DanyAPI Environment Configuration
+	DANYAPI_HOST=0.0.0.0
+	DANYAPI_PORT=8000
+	DEBUG=False
+	`;
+				writeFileSync(danyEnvFile, defaultEnv, 'utf-8');
+				console.log(`[Bootstrap] Created default .env for DanyAPI at ${danyEnvFile}`);
+			}
 		}
 	}
 

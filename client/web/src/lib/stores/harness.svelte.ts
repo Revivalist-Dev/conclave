@@ -1,5 +1,5 @@
 import type { Conversation, Message, Provider, HarnessSettings, ToolStep, Attachment, Project, Tab, ModelInfo } from '../types';
-import { enterMinimalistWindow, exitMinimalistWindow, loadWindowState, initWindowListeners, setAlwaysOnTop } from '../services/windowManager';
+import { enterMinimalistWindow, exitMinimalistWindow, loadWindowState, initWindowListeners, setAlwaysOnTop, isTauriEnvironment } from '../services/windowManager';
 import { goto } from '$app/navigation';
 
 const INITIAL_PROVIDERS: Provider[] = [
@@ -83,6 +83,9 @@ class HarnessStore {
 	conversations = $state<Conversation[]>([]);
 	serverProjects = $state<Project[]>([]);
 	providers = $state<Provider[]>(INITIAL_PROVIDERS);
+	// Installed plugins (MCP servers / process plugins) — refreshed via PLUGINS_UPDATED
+	plugins = $state<any[]>([]);
+	pluginError = $state<string>('');
 	availableModels = $state<ModelInfo[]>([
 		{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', provider: 'DeepSeek', desc: 'Fast reasoning & chat' },
 		{ id: 'deepseek-v4-flash-thinking', name: 'DeepSeek V4 Flash (Thinking)', provider: 'DeepSeek', desc: 'Deep thinking reasoning process' },
@@ -104,7 +107,13 @@ class HarnessStore {
 	pendingNewChatGroup = $state<string>('Discussions');
 	lastProjectDirectory = $state<string>(typeof localStorage !== 'undefined' ? localStorage.getItem('brainstorm_last_project_dir') || '' : '');
 	selectedLlmProvider = $state<string>('DeepSeek');
-	selectedLlmModel = $state<string>('deepseek-v4-flash');
+	// Active model persists across sessions; both windows (desktop + HUD) share
+	// this store and its setActiveModel/applyTabLastModel functions.
+	selectedLlmModel = $state<string>(
+		typeof localStorage !== 'undefined'
+			? localStorage.getItem('brainstorm_active_model') || 'deepseek-v4-flash'
+			: 'deepseek-v4-flash'
+	);
 	isGenerating = $state<boolean>(false);
 	isMinimalistMode = $state<boolean>(false);
 	messageSortOrder = $state<'asc' | 'desc'>('asc'); // 'asc' = oldest first, 'desc' = newest first
@@ -146,6 +155,7 @@ class HarnessStore {
 			groups[p] = [];
 		}
 		for (const conv of this.filteredConversations) {
+			if (conv.archived) continue;
 			const grp = conv.group || 'Discussions';
 			if (!groups[grp]) {
 				groups[grp] = [];
@@ -185,6 +195,42 @@ class HarnessStore {
 	});
 
 	// Actions
+	/** Provider that owns a model id (falls back to sensible defaults). */
+	resolveProvider(model: string): string {
+		if (!model) return 'DeepSeek';
+		const known = this.availableModels.find((m) => m.id === model || m.name === model);
+		if (known) return known.provider;
+		if (/^claude/i.test(model)) return 'Claude';
+		return 'DeepSeek';
+	}
+
+	/**
+	 * Change the active model: it becomes the model used for subsequent prompts,
+	 * is recorded on the active conversation, and persists across sessions.
+	 */
+	setActiveModel(model: string) {
+		if (!model) return;
+		this.selectedLlmModel = model;
+		this.selectedLlmProvider = this.resolveProvider(model);
+		const conv = this.activeConversation;
+		if (conv) {
+			conv.model = model;
+			conv.providerId = this.selectedLlmProvider;
+		}
+		if (typeof localStorage !== 'undefined') {
+			localStorage.setItem('brainstorm_active_model', model);
+		}
+	}
+
+	/** Adopt a conversation's last-used model as the active one (tab continuation). */
+	applyTabLastModel(tab?: { model?: string } | null) {
+		const candidate = tab?.model;
+		if (candidate && candidate !== this.selectedLlmModel) {
+			this.selectedLlmModel = candidate;
+			this.selectedLlmProvider = this.resolveProvider(candidate);
+		}
+	}
+
 	toggleMessageSortOrder() {
 		this.messageSortOrder = this.messageSortOrder === 'asc' ? 'desc' : 'asc';
 	}
@@ -216,6 +262,7 @@ class HarnessStore {
 	}
 
 	selectConversation(id: string) {
+		if (!id) return;
 		this.activeConversationId = id;
 		if (typeof localStorage !== 'undefined') {
 			localStorage.setItem('brainstorm_active_tab', id);
@@ -224,7 +271,11 @@ class HarnessStore {
 			this.openTabIds.push(id);
 		}
 		const conv = this.conversations.find((c) => c.id === id);
-		if (conv && conv.messages.length === 0) {
+		if (conv) {
+			// Continuing a conversation means continuing with its last-used model
+			this.applyTabLastModel(conv);
+		}
+		if (!conv || conv.messages.length === 0) {
 			this.fetchTabMessages(id);
 		}
 	}
@@ -261,12 +312,15 @@ class HarnessStore {
 
 	async enterMinimalistMode() {
 		this.isMinimalistMode = true;
+		if (this.activeConversationId && typeof localStorage !== 'undefined') {
+			localStorage.setItem('brainstorm_active_tab', this.activeConversationId);
+		}
 		await enterMinimalistWindow();
 	}
 
 	async exitMinimalistMode() {
 		this.isMinimalistMode = false;
-		await exitMinimalistWindow();
+		await exitMinimalistWindow(this.activeConversationId || undefined);
 	}
 
 	async toggleMinimalistMode() {
@@ -279,10 +333,8 @@ class HarnessStore {
 
 	async fetchTabMessages(tabId: string, days = 7) {
 		if (!tabId) return;
-		if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
-			(window as any).__orchestratorSocket.send({ type: 'TAB_FETCH', tabId, days });
-			return;
-		}
+
+		// 1. Instantly fetch messages via direct HTTP API to ensure immediate data readiness
 		try {
 			const res = await fetch(`http://127.0.0.1:4000/api/tabs/${tabId}/messages?days=${days}`);
 			if (res.ok) {
@@ -290,8 +342,28 @@ class HarnessStore {
 				this.handleTabDetail(tabId, messages);
 			}
 		} catch (err) {
-			console.warn('[Harness] Could not fetch tab messages:', err);
+			console.warn('[Harness] HTTP fetchTabMessages failed:', err);
 		}
+
+		// 2. Also send over WebSocket if connected
+		if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
+			(window as any).__orchestratorSocket.send({ type: 'TAB_FETCH', tabId, days });
+		}
+	}
+
+	/**
+	 * Derive the available-models list from installed plugins (each plugin's
+	 * manifest declares the models it provides). Falls back to the built-in
+	 * list when no plugin declares models (e.g. orchestrator offline in dev).
+	 */
+	syncPluginModels(plugins: any[]) {
+		const derived: ModelInfo[] = [];
+		for (const p of plugins || []) {
+			for (const m of p.models || []) {
+				derived.push({ id: m.id, name: m.name || m.id, provider: p.name || p.id, desc: `plugin: ${p.id}` });
+			}
+		}
+		if (derived.length > 0) this.availableModels = derived;
 	}
 
 	initFromSettings(data: any) {
@@ -300,6 +372,14 @@ class HarnessStore {
 		}
 		if (data.settings && typeof data.settings === 'object') {
 			this.settings = { ...this.settings, ...data.settings };
+			if (data.settings.temperature !== undefined) {
+				const t = parseFloat(data.settings.temperature);
+				if (!isNaN(t)) this.settings.temperature = t;
+			}
+			if (data.settings.max_tokens !== undefined) {
+				const m = parseInt(data.settings.max_tokens, 10);
+				if (!isNaN(m)) this.settings.maxTokens = m;
+			}
 			if (data.settings.overlay_response_duration) {
 				const d = Number(data.settings.overlay_response_duration);
 				if (!isNaN(d) && d > 0) this.settings.overlayResponseDuration = d;
@@ -308,18 +388,22 @@ class HarnessStore {
 		this.initFromServer(data.projects || [], data.tabs || data.conversations || []);
 	}
 
+	setSetting(key: string, value: any) {
+		if (typeof window !== 'undefined') {
+			(window as any).__orchestratorSocket?.send({
+				type: 'SETTINGS_SET',
+				key,
+				value: String(value)
+			});
+		}
+	}
+
 	setOverlayResponseDuration(seconds: number) {
 		this.settings.overlayResponseDuration = seconds;
 		if (typeof localStorage !== 'undefined') {
 			localStorage.setItem('brainstorm_overlay_duration', String(seconds));
 		}
-		if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
-			(window as any).__orchestratorSocket.send({
-				type: 'SETTING_SET',
-				key: 'overlay_response_duration',
-				value: String(seconds)
-			});
-		}
+		this.setSetting('overlay_response_duration', String(seconds));
 	}
 
 	async loadInitialData() {
@@ -363,6 +447,8 @@ class HarnessStore {
 					existing.title = t.name || existing.title;
 					existing.project_id = t.project_id;
 					existing.group = groupName;
+					existing.archived = !!t.archived;
+					if (t.last_model) existing.model = t.last_model;
 				} else {
 					this.conversations.push({
 						id: t.id,
@@ -374,25 +460,28 @@ class HarnessStore {
 						providerId: 'DeepSeek',
 						model: t.last_model || this.selectedLlmModel || 'deepseek-v4-flash',
 						messages: [],
+						archived: !!t.archived,
 						createdAt: t.created_at || Date.now(),
 						updatedAt: t.updated_at || Date.now()
 					});
 				}
 			}
 
-			// Restore or set active tab
+			// Restore or set active tab (never restore into an archived thread)
 			const savedActive = typeof localStorage !== 'undefined' ? localStorage.getItem('brainstorm_active_tab') : null;
-			const target = (savedActive && this.conversations.find((c) => c.id === savedActive))
+			const target = (savedActive && this.conversations.find((c) => c.id === savedActive && !c.archived))
 				? savedActive
-				: (this.activeConversationId && this.conversations.find((c) => c.id === this.activeConversationId))
+				: (this.activeConversationId && this.conversations.find((c) => c.id === this.activeConversationId && !c.archived))
 					? this.activeConversationId
-					: this.conversations[0]?.id;
+					: this.conversations.find((c) => !c.archived)?.id;
 
 			if (target) {
 				this.activeConversationId = target;
 				if (!this.openTabIds.includes(target)) {
 					this.openTabIds = [target];
 				}
+				// Continuing the active conversation with its last-used model
+				this.applyTabLastModel(this.conversations.find((c) => c.id === target));
 				// Load last few days of chats for whichever tab is open
 				this.fetchTabMessages(target, 7);
 			}
@@ -427,31 +516,57 @@ class HarnessStore {
 	}
 
 	handleTabDetail(tabId: string, messages: any[]) {
-		const conv = this.conversations.find((c) => c.id === tabId);
-		if (conv && Array.isArray(messages)) {
-			conv.messages = messages.map((m) => ({
-				id: m.id,
-				tabId: m.tab_id || tabId,
-				role: m.role,
-				content: m.content,
-				attachments: m.attachments,
-				model: m.model,
-				totalTokens: m.totalTokens ?? m.usage?.totalTokens,
-				usage: m.usage,
-				toolSteps: m.tool_steps?.map((s: any) => ({
-					id: s.id,
-					name: s.title,
-					count: s.badge_count || 1,
-					status: s.status === 'done' ? 'completed' : 'running',
-					details: (s.details || []).map((d: any) => ({
-						title: d.action,
-						content: d.detail || '',
-						status: d.status === 'done' ? 'success' : 'info'
-					}))
-				})),
-				createdAt: m.created_at
-			}));
+		if (!tabId || !Array.isArray(messages)) return;
+		let conv = this.conversations.find((c) => c.id === tabId);
+
+		const formattedMessages = messages.map((m) => ({
+			id: m.id,
+			tabId: m.tab_id || tabId,
+			role: m.role,
+			content: m.content,
+			attachments: m.attachments,
+			model: m.model,
+			totalTokens: m.totalTokens ?? m.usage?.totalTokens,
+			usage: m.usage,
+			toolSteps: m.tool_steps?.map((s: any) => ({
+				id: s.id,
+				name: s.title,
+				count: s.badge_count || 1,
+				status: s.status === 'done' ? 'completed' : 'running',
+				details: (s.details || []).map((d: any) => ({
+					title: d.action,
+					content: d.detail || '',
+					status: d.status === 'done' ? 'success' : 'info'
+				}))
+			})),
+			createdAt: m.created_at
+		}));
+
+		if (conv) {
+			conv.messages = formattedMessages;
+		} else {
+			const projId = this.serverProjects[0]?.id || '112';
+			conv = {
+				id: tabId,
+				chatId: tabId,
+				title: 'Conversation',
+				group: 'Discussions',
+				project_id: projId,
+				providerId: 'DeepSeek',
+				model: this.selectedLlmModel || 'deepseek-v4-flash',
+				messages: formattedMessages,
+				createdAt: Date.now(),
+				updatedAt: Date.now()
+			};
+			this.conversations.unshift(conv);
 		}
+
+		if (!this.openTabIds.includes(tabId)) {
+			this.openTabIds.push(tabId);
+		}
+
+		// Reassign conversations array to guarantee Svelte 5 reactivity updates immediately
+		this.conversations = [...this.conversations];
 	}
 
 	createConversation(group = 'Discussions', dir?: string, providerId?: string, model?: string) {
@@ -510,6 +625,59 @@ class HarnessStore {
 		}
 	}
 
+	/** Rename a thread: persists server-side (TAB_RENAME) and updates every window via broadcast. */
+	renameConversation(id: string, title: string) {
+		const trimmed = title.trim();
+		if (!trimmed || !id) return;
+		this.updateConversationTitle(id, trimmed);
+		if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
+			(window as any).__orchestratorSocket.send({ type: 'TAB_RENAME', tabId: id, name: trimmed });
+		}
+	}
+
+	/** Archive or unarchive a thread. Archived threads leave the lists but keep their data. */
+	archiveConversation(id: string, archived: boolean) {
+		const conv = this.conversations.find((c) => c.id === id);
+		if (conv) conv.archived = archived;
+		if (archived) this.closeTab(id);
+		if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
+			(window as any).__orchestratorSocket.send({ type: 'TAB_ARCHIVE', tabId: id, archived });
+		}
+	}
+
+	/** Broadcast handler: another window archived/unarchived this thread. */
+	handleTabArchived(tabId: string, archived: boolean) {
+		const conv = this.conversations.find((c) => c.id === tabId || c.chatId === tabId);
+		if (conv) conv.archived = archived;
+		if (archived) this.closeTab(tabId);
+	}
+
+	/** Export a thread as a markdown file download. */
+	downloadConversation(id: string) {
+		const conv = this.conversations.find((c) => c.id === id);
+		if (!conv) return;
+		const stamp = new Date().toISOString().slice(0, 10);
+		const lines: string[] = [
+			`# ${conv.title}`,
+			'',
+			`_${conv.group} · exported ${stamp} · ${conv.messages.length} messages_`,
+			''
+		];
+		for (const m of conv.messages) {
+			const who = m.role === 'user' ? 'You' : `Assistant${m.model ? ` (${m.model})` : ''}`;
+			lines.push(`## ${who}`, '', m.content || '*(empty)*', '');
+		}
+		const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${conv.title.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 60) || 'thread'}.md`;
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		URL.revokeObjectURL(url);
+	}
+
 	deleteConversation(id: string) {
 		this.conversations = this.conversations.filter((c) => c.id !== id);
 		this.closeTab(id);
@@ -555,8 +723,8 @@ class HarnessStore {
 
 		this.isGenerating = true;
 
-		// 1. If Orchestrator WebSocket is connected, stream directly via WebSocket
-		if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
+		// 1. If inside Tauri or WebSocket connected, stream directly via WebSocket
+		if (isTauriEnvironment() || (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected')) {
 			const assistantMsg: Message = {
 				id: 'msg-' + (Date.now() + 1),
 				role: 'assistant',
@@ -568,7 +736,7 @@ class HarnessStore {
 			};
 			conv.messages.push(assistantMsg);
 
-			(window as any).__orchestratorSocket.send({
+			(window as any).__orchestratorSocket?.send({
 				type: 'PROMPT_SEND',
 				tabId: conv.id,
 				chatId: conv.chatId || conv.id,

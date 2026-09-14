@@ -19,15 +19,21 @@ export class ServiceSupervisor {
 	private sandboxDir: string;
 
 	constructor() {
-		// Prefer root level sandbox_api or api_sandbox
-		const rootSandboxApi = join(import.meta.dir, '../../../sandbox_api');
-		const rootApiSandbox = join(import.meta.dir, '../../../api_sandbox');
-		if (existsSync(rootSandboxApi)) {
-			this.sandboxDir = rootSandboxApi;
-		} else if (existsSync(rootApiSandbox)) {
-			this.sandboxDir = rootApiSandbox;
+		if (process.env.BRAINSTORM_DATA_DIR) {
+			// Production sidecar: no sandbox next to the read-only bundle; the
+			// local Docker provider simply reports as unavailable.
+			this.sandboxDir = process.env.BRAINSTORM_DATA_DIR;
 		} else {
-			this.sandboxDir = join(import.meta.dir, '../../sandbox_api');
+			// Prefer root level sandbox_api or api_sandbox
+			const rootSandboxApi = join(import.meta.dir, '../../../sandbox_api');
+			const rootApiSandbox = join(import.meta.dir, '../../../api_sandbox');
+			if (existsSync(rootSandboxApi)) {
+				this.sandboxDir = rootSandboxApi;
+			} else if (existsSync(rootApiSandbox)) {
+				this.sandboxDir = rootApiSandbox;
+			} else {
+				this.sandboxDir = join(import.meta.dir, '../../sandbox_api');
+			}
 		}
 
 		// DanyAPI: runs in Docker container on localhost:8000
@@ -80,6 +86,18 @@ export class ServiceSupervisor {
 			console.log(`[Supervisor] ${name} (DeepSeek/Qwen) is disabled in settings. Skipping.`);
 			service.status = 'stopped';
 			this.recordState(service);
+			return;
+		}
+
+		// Fast path: something already serves the port (started manually, by a
+		// plugin scaffold, or from another checkout) — no local directory needed.
+		if (await this.pingService(service.port)) {
+			service.status = 'running';
+			console.log(`[Supervisor] ${name} is already running and healthy on http://127.0.0.1:${service.port}`);
+			this.recordState(service);
+			if (existsSync(service.directory)) {
+				this.attachLogStreamer(service);
+			}
 			return;
 		}
 

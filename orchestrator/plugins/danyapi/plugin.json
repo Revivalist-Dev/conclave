@@ -1,0 +1,46 @@
+{
+	"id": "danyapi",
+	"name": "DanyAPI",
+	"version": "0.1.0",
+	"type": "docker",
+	"serviceName": "DanyAPI",
+	"port": 8000,
+	"description": "Self-contained local LLM provider (DeepSeek V4 / Qwen) running as a Docker container. Its MCP abilities are scaffolded in mcp.js — the container itself has no MCP server.",
+	"models": [
+		{ "id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash" },
+		{ "id": "deepseek-v4-flash-thinking", "name": "DeepSeek V4 Flash (Thinking)" },
+		{ "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro" },
+		{ "id": "deepseek-v4-pro-thinking", "name": "DeepSeek V4 Pro (Thinking)" },
+		{ "id": "qwen3.7-plus", "name": "Qwen 3.7 Plus" },
+		{ "id": "qwen3.8-max", "name": "Qwen 3.8 Max" }
+	],
+	"mcp": {
+		"scaffold": "mcp.js",
+		"tools": [
+			{
+				"name": "ask_deepseek",
+				"description": "Ask DeepSeek (via DanyAPI) a question. Uses the shared MCP thread; the session_id is forwarded to DanyAPI.",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"question": { "type": "string", "description": "The question to ask" },
+						"session_id": { "type": "string", "description": "Provider-side session id (default: \"default\")" }
+					},
+					"required": ["question"]
+				}
+			},
+			{
+				"name": "ask_qwen",
+				"description": "Ask Qwen (via DanyAPI) a question. Uses the shared MCP thread; the session_id is forwarded to DanyAPI.",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"question": { "type": "string", "description": "The question to ask" },
+						"session_id": { "type": "string", "description": "Provider-side session id (default: \"default\")" }
+					},
+					"required": ["question"]
+				}
+			}
+		]
+	}
+}

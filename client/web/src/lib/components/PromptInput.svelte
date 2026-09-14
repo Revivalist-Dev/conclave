@@ -91,13 +91,7 @@
 	}
 
 	function selectModel(modelId: string) {
-		harness.selectedLlmModel = modelId;
-		const found = harness.availableModels.find((m) => m.id === modelId);
-		harness.selectedLlmProvider = found?.provider || (modelId.toLowerCase().includes('qwen') ? 'Qwen' : 'DeepSeek');
-		if (activeConv) {
-			activeConv.providerId = harness.selectedLlmProvider;
-			activeConv.model = modelId;
-		}
+		harness.setActiveModel(modelId);
 		isModelMenuOpen = false;
 	}
 

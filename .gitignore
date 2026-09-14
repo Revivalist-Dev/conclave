@@ -20,6 +20,7 @@ api_sandbox
 target/
 crates/
 build/
+client/tauri/src-tauri/binaries/
 .svelte-kit
 
 # Agent / assistant working directories
@@ -29,3 +30,4 @@ build/
 .codex/
 .opencode/
 .claude
+*.bun-build

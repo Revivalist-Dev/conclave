@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { harness } from '$lib/stores/harness.svelte';
 	import { orchestratorSocket } from '$lib/services/orchestratorSocket.svelte';
 	import { handleWindowDrag, handleShrinkWindow } from '$lib/utils/drag';
@@ -9,7 +10,6 @@
 		Cpu,
 		Server,
 		Sparkles,
-		Check,
 		RefreshCw,
 		ExternalLink,
 		Layers,
@@ -18,13 +18,34 @@
 		Minimize2
 	} from 'lucide-svelte';
 
-	function selectModel(model: ModelInfo) {
-		harness.selectedLlmModel = model.id;
-		harness.selectedLlmProvider = model.provider;
-		if (harness.activeConversation) {
-			harness.activeConversation.model = model.id;
-			harness.activeConversation.providerId = model.provider;
-		}
+	// === Plugins (MCP servers / process plugins) ===
+	let pluginUrlInput = $state('');
+	let pluginBusy = $state(false);
+
+	function refreshPlugins() {
+		orchestratorSocket.send({ type: 'PLUGIN_LIST' });
+	}
+
+	onMount(() => {
+		refreshPlugins();
+	});
+
+	function installPluginFromUrl() {
+		const url = pluginUrlInput.trim();
+		if (!url || pluginBusy) return;
+		pluginBusy = true;
+		orchestratorSocket.send({ type: 'PLUGIN_INSTALL', url });
+		// PLUGINS_UPDATED arrives when the orchestrator finishes; optimistic clear
+		pluginUrlInput = '';
+		setTimeout(() => (pluginBusy = false), 1500);
+	}
+
+	function togglePlugin(id: string, enabled: boolean) {
+		orchestratorSocket.send({ type: 'PLUGIN_TOGGLE', id, enabled });
+	}
+
+	function removePlugin(id: string) {
+		orchestratorSocket.send({ type: 'PLUGIN_REMOVE', id });
 	}
 
 	function getProviderBadgeColor(provider: string) {
@@ -46,21 +67,16 @@
 	onmousedown={handleWindowDrag}
 	class="h-12 flex items-center justify-between px-6 border-b border-zinc-800/80 bg-zinc-950/80 select-none flex-shrink-0 cursor-default"
 >
-	<div data-tauri-drag-region class="flex items-center gap-3">
-		<a
-			href="/"
-			class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-100 text-xs transition-colors cursor-pointer shadow-sm"
-			title="Return to conversation view"
-		>
-			<ArrowLeft class="w-3.5 h-3.5" />
-			<span>Back to Chat</span>
-		</a>
-		<div class="h-4 w-px bg-zinc-800"></div>
-		<div class="flex items-center gap-2">
-			<SlidersHorizontal class="w-4 h-4 text-cyan-400" />
-			<h1 class="text-xs font-semibold text-zinc-200">Model Parameters & Settings</h1>
+		<div data-tauri-drag-region class="flex items-center gap-3">
+			<a
+				href="/"
+				class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-100 text-xs transition-colors cursor-pointer shadow-sm"
+				title="Return to conversation view"
+			>
+				<ArrowLeft class="w-3.5 h-3.5" />
+				<span>Back to Chat</span>
+			</a>
 		</div>
-	</div>
 
 	<!-- Orchestrator Socket Status Pill & Shrink Window Button -->
 	<div class="flex items-center gap-2">
@@ -90,60 +106,140 @@
 
 <!-- Scrollable Settings Body -->
 <div class="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto w-full space-y-8 select-none text-xs text-zinc-300">
-	<!-- Section 1: Active LLM Plugin Models -->
-	<section class="space-y-3">
-		<div class="flex items-center justify-between pb-2 border-b border-zinc-800/60">
-			<div class="flex items-center gap-2">
-				<Sparkles class="w-4 h-4 text-cyan-400" />
-				<h2 class="text-sm font-semibold text-zinc-100">Available Models</h2>
-				<span class="text-[10px] text-zinc-500 font-mono">({harness.availableModels.length} loaded from plugins)</span>
+		<!-- Section 1: Available Models (read-only, derived from plugins) -->
+		<section class="space-y-3">
+			<div class="flex items-center justify-between pb-2 border-b border-zinc-800/60">
+				<div class="flex items-center gap-2">
+					<Sparkles class="w-4 h-4 text-cyan-400" />
+					<h2 class="text-sm font-semibold text-zinc-100">Available Models</h2>
+					<span class="text-[10px] text-zinc-500 font-mono">({harness.availableModels.length} from plugins)</span>
+				</div>
+				<span class="text-[11px] text-zinc-400 font-mono">
+					Active: <strong class="text-zinc-200">{harness.selectedLlmModel || 'deepseek-v4-flash'}</strong>
+				</span>
 			</div>
-			<span class="text-[11px] text-zinc-400 font-mono">
-				Active: <strong class="text-zinc-200">{harness.selectedLlmModel || 'deepseek-v4-flash'}</strong>
-			</span>
-		</div>
 
-		<div class="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-			{#each harness.availableModels as model}
-				{@const isSelected = (harness.selectedLlmModel || 'deepseek-v4-flash') === model.id}
+			<div class="rounded-xl bg-zinc-900/30 border border-zinc-800/50 divide-y divide-zinc-800/40">
+				{#each harness.availableModels as model (model.id + model.provider)}
+					<div class="flex items-center justify-between px-3 py-1.5">
+						<span class="font-mono text-[11px] text-zinc-200 truncate">{model.id}</span>
+						<span
+							class="text-[9px] px-1.5 py-0.5 rounded border font-mono uppercase tracking-tight flex-shrink-0 ml-2 {getProviderBadgeColor(model.provider)}"
+						>
+							[{model.provider}]
+						</span>
+					</div>
+				{/each}
+				{#if harness.availableModels.length === 0}
+					<div class="px-3 py-2 text-[10px] text-zinc-500">No models — install a plugin that provides models.</div>
+				{/if}
+			</div>
+		</section>
+
+		<!-- Section 2: Plugins (MCP servers & tools) -->
+		<section class="space-y-3">
+			<div class="pb-2 border-b border-zinc-800/60 flex items-center justify-between">
+				<div class="flex items-center gap-2">
+					<Layers class="w-4 h-4 text-cyan-400" />
+					<h2 class="text-sm font-semibold text-zinc-100">Plugins — MCP Servers & Tools</h2>
+				</div>
 				<button
 					type="button"
-					onclick={() => selectModel(model)}
-					class="w-full text-left p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between {isSelected
-						? 'bg-zinc-900/90 border-cyan-500/60 text-zinc-100 shadow-md ring-1 ring-cyan-500/20'
-						: 'bg-zinc-900/40 border-zinc-800/70 text-zinc-400 hover:bg-zinc-900/70 hover:text-zinc-200 hover:border-zinc-700'}"
+					onclick={refreshPlugins}
+					class="p-1.5 rounded-md text-zinc-400 hover:text-cyan-300 hover:bg-zinc-800/80 transition-colors cursor-pointer"
+					title="Refresh plugin list"
 				>
-					<div class="flex items-start justify-between gap-2 w-full">
-						<div class="min-w-0">
-							<div class="flex items-center gap-2">
-								<span class="font-medium text-xs {isSelected ? 'text-white' : 'text-zinc-200'}">
-									{model.name}
-								</span>
-								<span class="text-[9px] px-1.5 py-0.5 rounded border font-mono uppercase tracking-tight {getProviderBadgeColor(model.provider)}">
-									{model.provider}
-								</span>
+					<RefreshCw class="w-3.5 h-3.5" />
+				</button>
+			</div>
+
+			<div class="p-4 rounded-xl bg-zinc-900/40 border border-zinc-800/70 space-y-3">
+				<!-- Install from git URL -->
+				<div class="flex items-center gap-2">
+					<input
+						type="text"
+						bind:value={pluginUrlInput}
+						onkeydown={(e) => e.key === 'Enter' && installPluginFromUrl()}
+						placeholder="https://github.com/user/my-plugin.git (repo with plugin.json)"
+						class="flex-1 bg-zinc-900/90 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-zinc-100 placeholder-zinc-600 outline-none focus:border-cyan-500/50 font-mono"
+					/>
+					<button
+						type="button"
+						onclick={installPluginFromUrl}
+						disabled={!pluginUrlInput.trim() || pluginBusy}
+						class="px-2.5 py-1.5 rounded-lg bg-cyan-500/90 hover:bg-cyan-400 disabled:opacity-30 text-zinc-950 text-[11px] font-semibold transition-all cursor-pointer disabled:cursor-not-allowed flex-shrink-0"
+					>
+						{pluginBusy ? 'Installing…' : 'Install'}
+					</button>
+				</div>
+
+				{#if harness.pluginError}
+					<div class="px-2.5 py-1.5 rounded-lg bg-rose-950/40 border border-rose-800/50 text-[10px] text-rose-300 font-mono">
+						{harness.pluginError}
+					</div>
+				{/if}
+
+				{#if harness.plugins.length === 0}
+					<p class="text-[10px] text-zinc-500 leading-relaxed">
+						No plugins installed. Install an MCP server plugin to extend the assistant with external tools —
+						tools appear automatically on the orchestrator's MCP endpoint (http://127.0.0.1:4000/mcp).
+					</p>
+				{:else}
+					{#each harness.plugins as plugin (plugin.id)}
+						<div class="flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg bg-zinc-950/60 border border-zinc-800/60">
+							<div class="flex items-center gap-2.5 min-w-0">
+								<span
+									class="w-2 h-2 rounded-full flex-shrink-0 {plugin.status === 'running'
+										? 'bg-emerald-400'
+										: plugin.status === 'starting'
+											? 'bg-amber-400 animate-pulse'
+											: plugin.status === 'failed'
+												? 'bg-rose-500'
+												: 'bg-zinc-600'}"
+									title={plugin.error || plugin.status}
+								></span>
+								<div class="min-w-0">
+									<div class="text-xs text-zinc-100 font-medium truncate">{plugin.name}</div>
+									<div class="text-[10px] text-zinc-500 font-mono truncate">
+										{plugin.id} · {plugin.type}
+										{#if plugin.type === 'mcp' && plugin.tools?.length}
+											· {plugin.tools.length} tool{plugin.tools.length === 1 ? '' : 's'}
+										{/if}
+										{#if plugin.models?.length}
+											· {plugin.models.length} model{plugin.models.length === 1 ? '' : 's'}
+										{/if}
+										{#if plugin.error}
+											· <span class="text-rose-400">{plugin.error}</span>
+										{/if}
+									</div>
+								</div>
 							</div>
-							<div class="font-mono text-[10px] text-zinc-500 mt-0.5 truncate">
-								id: {model.id}
+							<div class="flex items-center gap-2 flex-shrink-0">
+								<label class="flex items-center gap-1.5 cursor-pointer" title={plugin.enabled ? 'Disable' : 'Enable'}>
+									<input
+										type="checkbox"
+										checked={plugin.enabled}
+										onchange={(e) => togglePlugin(plugin.id, e.currentTarget.checked)}
+										class="accent-cyan-500 w-3 h-3 cursor-pointer"
+									/>
+									<span class="text-[10px] text-zinc-400">{plugin.enabled ? 'On' : 'Off'}</span>
+								</label>
+								<button
+									type="button"
+									onclick={() => removePlugin(plugin.id)}
+									class="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+									title="Remove plugin"
+								>
+									<AlertCircle class="w-3.5 h-3.5" />
+								</button>
 							</div>
 						</div>
-						{#if isSelected}
-							<div class="w-5 h-5 rounded-full bg-cyan-950/80 border border-cyan-800/60 flex items-center justify-center text-cyan-400 flex-shrink-0">
-								<Check class="w-3 h-3" />
-							</div>
-						{/if}
-					</div>
-					{#if model.desc}
-						<p class="text-[11px] text-zinc-400 mt-2 leading-relaxed">
-							{model.desc}
-						</p>
-					{/if}
-				</button>
-			{/each}
-		</div>
-	</section>
+					{/each}
+				{/if}
+			</div>
+		</section>
 
-	<!-- Section 2: Model Sampling Parameters -->
+		<!-- Section 3: Model Sampling Parameters -->
 	<section class="space-y-4">
 		<div class="pb-2 border-b border-zinc-800/60 flex items-center gap-2">
 			<SlidersHorizontal class="w-4 h-4 text-cyan-400" />
@@ -166,6 +262,7 @@
 					max="1.5"
 					step="0.05"
 					bind:value={harness.settings.temperature}
+					onchange={() => harness.setSetting('temperature', harness.settings.temperature)}
 					class="w-full accent-cyan-400 bg-zinc-800 cursor-pointer h-1.5 rounded"
 				/>
 				<p class="text-[10px] text-zinc-500 leading-tight">
@@ -188,6 +285,7 @@
 					max="8192"
 					step="256"
 					bind:value={harness.settings.maxTokens}
+					onchange={() => harness.setSetting('max_tokens', harness.settings.maxTokens)}
 					class="w-full accent-cyan-400 bg-zinc-800 cursor-pointer h-1.5 rounded"
 				/>
 				<p class="text-[10px] text-zinc-500 leading-tight">
@@ -246,7 +344,7 @@
 		</div>
 	</section>
 
-	<!-- Section 3: Engine Infrastructure & Local Containers -->
+	<!-- Section 4: Engine Infrastructure & Local Containers -->
 	<section class="space-y-3">
 		<div class="pb-2 border-b border-zinc-800/60 flex items-center gap-2">
 			<Server class="w-4 h-4 text-cyan-400" />
@@ -272,7 +370,7 @@
 		</div>
 	</section>
 
-	<!-- Section 4: Bun Orchestrator Architecture -->
+	<!-- Section 5: Bun Orchestrator Architecture -->
 	<section class="space-y-3">
 		<div class="pb-2 border-b border-zinc-800/60 flex items-center gap-2">
 			<Cpu class="w-4 h-4 text-cyan-400" />

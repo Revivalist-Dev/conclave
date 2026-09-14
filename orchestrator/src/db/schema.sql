@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS tabs (
     name TEXT NOT NULL,            -- user-editable tab name
     last_response TEXT,            -- snippet of last LLM response
     last_model TEXT,               -- model used in last exchange
+    archived INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -76,3 +77,16 @@ CREATE TABLE IF NOT EXISTS service_state (
     error TEXT
 );
 
+
+-- Plugins (downloaded MCP servers / process plugins)
+CREATE TABLE IF NOT EXISTS plugins (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,            -- 'mcp' | 'bun' | 'docker'
+    enabled INTEGER NOT NULL DEFAULT 1,
+    manifest TEXT NOT NULL,        -- full manifest JSON
+    status TEXT NOT NULL DEFAULT 'stopped',
+    last_error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);

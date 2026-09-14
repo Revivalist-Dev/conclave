@@ -179,15 +179,24 @@
 		return thinkHtml + bodyHtml;
 	}
 
+	let lastConvId = '';
 	$effect(() => {
+		const convId = activeConv?.id || '';
 		const currentCount = activeConv?.messages.length || 0;
 		if (!messagesContainer || currentCount === 0) return;
 
-		if (currentCount !== lastMsgCount) {
+		if (convId !== lastConvId || currentCount !== lastMsgCount) {
+			const isSwitchingConv = convId !== lastConvId;
+			lastConvId = convId;
 			lastMsgCount = currentCount;
 			const lastMsg = activeConv?.messages[currentCount - 1];
 
-			if (lastMsg?.role === 'user') {
+			if (isSwitchingConv) {
+				setTimeout(() => {
+					if (!messagesContainer) return;
+					messagesContainer.scrollTop = messagesContainer.scrollHeight;
+				}, 60);
+			} else if (lastMsg?.role === 'user') {
 				// Question added: center it smoothly so it scrolls up comfortably from the bottom
 				setTimeout(() => {
 					if (!messagesContainer) return;
@@ -218,13 +227,24 @@
 	});
 </script>
 
-<div
-	bind:this={messagesContainer}
-	onclick={handleContainerClick}
-	role="region"
-	aria-label="Conversation messages"
-	class="flex-1 overflow-y-auto px-8 pt-3 pb-3 select-none"
->
+<div class="relative flex-1 min-h-0 flex flex-col overflow-hidden">
+	<!-- Debug: current tab id, faint, top-left of the chat -->
+	{#if harness.activeConversationId}
+		<div
+			class="absolute top-1 left-2.5 z-10 pointer-events-none select-none text-[9px] leading-none font-mono text-zinc-600/40"
+			title="Tab ID"
+		>
+			{harness.activeConversationId}
+		</div>
+	{/if}
+
+	<div
+		bind:this={messagesContainer}
+		onclick={handleContainerClick}
+		role="region"
+		aria-label="Conversation messages"
+		class="flex-1 overflow-y-auto px-8 pt-3 pb-3 select-none"
+	>
 	{#if !activeConv || activeConv.messages.length === 0}
 		<!-- Empty state -->
 		<div class="h-full flex flex-col items-center justify-center text-center text-zinc-500 py-16">
@@ -348,6 +368,7 @@
 			</div>
 		{/if}
 	{/if}
+	</div>
 </div>
 
 <style>

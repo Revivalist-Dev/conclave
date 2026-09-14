@@ -5,10 +5,72 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import NewChatModal from '$lib/components/NewChatModal.svelte';
 
+	import { listenTauriEvent } from '$lib/services/windowManager';
+
 	let { children } = $props();
+
+	async function refreshActiveThread(targetTabId?: string | null) {
+		const active =
+			targetTabId ||
+			(typeof localStorage !== 'undefined' ? localStorage.getItem('brainstorm_active_tab') : null) ||
+			harness.activeConversationId;
+
+		if (active) {
+			harness.selectConversation(active);
+			await harness.fetchTabMessages(active, 7);
+		} else {
+			await harness.loadInitialData();
+		}
+	}
 
 	onMount(() => {
 		harness.loadInitialData();
+		harness.initWindowState();
+
+		let unlistenSwitch: (() => void) | null = null;
+		let unlistenRefresh: (() => void) | null = null;
+
+		listenTauriEvent('switch-tab', (data: any) => {
+			refreshActiveThread(data?.tabId);
+		}).then((fn) => {
+			unlistenSwitch = fn;
+		});
+
+		listenTauriEvent('refresh-active-thread', (data: any) => {
+			refreshActiveThread(data?.tabId);
+		}).then((fn) => {
+			unlistenRefresh = fn;
+		});
+
+		// Listen for cross-window localStorage changes (from overlay)
+		const onStorage = (e: StorageEvent) => {
+			if (e.key === 'brainstorm_active_tab' || e.key === 'brainstorm_refresh_ts') {
+				const target = e.key === 'brainstorm_active_tab' ? e.newValue : undefined;
+				refreshActiveThread(target);
+			}
+		};
+		window.addEventListener('storage', onStorage);
+
+		// Listen for window focus & visibility changes
+		const onFocusOrVisible = () => {
+			refreshActiveThread();
+		};
+		window.addEventListener('focus', onFocusOrVisible);
+
+		const onVisibilityChange = () => {
+			if (document.visibilityState === 'visible') {
+				refreshActiveThread();
+			}
+		};
+		document.addEventListener('visibilitychange', onVisibilityChange);
+
+		return () => {
+			if (unlistenSwitch) unlistenSwitch();
+			if (unlistenRefresh) unlistenRefresh();
+			window.removeEventListener('storage', onStorage);
+			window.removeEventListener('focus', onFocusOrVisible);
+			document.removeEventListener('visibilitychange', onVisibilityChange);
+		};
 	});
 </script>
 

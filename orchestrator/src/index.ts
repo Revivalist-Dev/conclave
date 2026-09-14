@@ -1,6 +1,8 @@
 import { runBootstrap } from './bootstrap';
 import { supervisor } from './processes/supervisor';
 import { mcpServer } from './mcp';
+import { pluginManager } from './plugins';
+import { pluginBus } from './plugins/bus';
 import { llmRouter } from './router';
 import { repos, db } from './db';
 import { getAllAvailableModels } from './providers';
@@ -16,9 +18,61 @@ console.log('-----------------------------------------------------');
 
 const bootstrap = await runBootstrap();
 supervisor.startAll();
+pluginManager.restore().catch((e) => console.warn('[Plugins] Restore failed:', e));
+
+// Plugin-generated threads (e.g. DanyAPI ask_* MCP threads) announce themselves
+// so open windows refresh the conversation.
+pluginBus.on('tab-updated', ({ tabId }) => {
+	broadcastWs({
+		type: 'TAB_UPDATED',
+		tabId,
+		conversationId: tabId
+	}, `tabId="${tabId}"`);
+});
+
+/**
+ * Best-effort: ask every provider backend that may host this thread's
+ * server-side session to delete it (DELETE <endpoint>/v1/session/<tabId>).
+ * Failures are ignored — the local thread is deleted regardless.
+ */
+function deleteProviderSessions(tabId: string): void {
+	const endpoints: string[] = [];
+	try {
+		if (repos.isDeepSeekEnabled()) {
+			const endpoint = String(repos.getSetting('deepseek_endpoint') || 'http://127.0.0.1:8000/v1').replace(/\/+$/, '');
+			endpoints.push(endpoint);
+		}
+	} catch {}
+
+	for (const endpoint of endpoints) {
+		fetch(`${endpoint}/session/${encodeURIComponent(tabId)}`, {
+			method: 'DELETE',
+			signal: AbortSignal.timeout(3000)
+		})
+			.then((res) => console.log(`[Tabs] Provider session delete ${tabId} @ ${endpoint}: ${res.status}`))
+			.catch(() => console.log(`[Tabs] Provider session delete ${tabId} @ ${endpoint}: unreachable (ignored)`));
+	}
+}
 
 // Models exposed directly from active provider plugins
 export const AVAILABLE_MODELS = getAllAvailableModels();
+
+const connectedClients = new Set<any>();
+
+export function broadcastWs(payload: any, detail?: string) {
+	const json = JSON.stringify(payload);
+	const bytes = Buffer.byteLength(json, 'utf-8');
+	const sizeStr = bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+	const desc = detail ? ` (${sizeStr}: ${detail})` : ` (${sizeStr})`;
+	console.log(`[WebSocket] Broadcast -> (${connectedClients.size} clients) [${payload.type}]${desc}`);
+	for (const client of connectedClients) {
+		try {
+			if (client.readyState === 1) {
+				client.send(json);
+			}
+		} catch {}
+	}
+}
 
 const server = Bun.serve<{ id: string }>({
 	port: PORT,
@@ -38,7 +92,7 @@ const server = Bun.serve<{ id: string }>({
 			if (req.method === 'POST') {
 				try {
 					const body = await req.json();
-					const response = mcpServer.handleJsonRpc(body);
+					const response = await mcpServer.handleJsonRpc(body);
 					return new Response(JSON.stringify(response), {
 						headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
 					});
@@ -107,7 +161,10 @@ const server = Bun.serve<{ id: string }>({
 		if (url.pathname.startsWith('/api/tabs/') && req.method === 'DELETE') {
 			const parts = url.pathname.split('/');
 			const tabId = parts[3];
-			if (tabId) repos.deleteTab(tabId);
+			if (tabId) {
+				deleteProviderSessions(tabId);
+				repos.deleteTab(tabId);
+			}
 			return new Response(JSON.stringify({ success: true, tabId }), {
 				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
 			});
@@ -123,6 +180,16 @@ const server = Bun.serve<{ id: string }>({
 		// API: Settings
 		if (url.pathname === '/api/settings') {
 			return new Response(JSON.stringify(repos.getSettings()), {
+				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+			});
+		}
+
+		// API: Client Log Diagnostics
+		if (url.pathname === '/api/log') {
+			const err = url.searchParams.get('err');
+			const msg = url.searchParams.get('msg');
+			console.log(`[CLIENT DIAGNOSTIC LOG] err="${err}" msg="${msg}"`);
+			return new Response(JSON.stringify({ ok: true }), {
 				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
 			});
 		}
@@ -161,7 +228,9 @@ const server = Bun.serve<{ id: string }>({
 				const model = (formData.get('model') as string) || 'default';
 
 				// 1. Save files to sandbox_api/data
-				const dataDir = join(import.meta.dir, '../../api_sandbox/data');
+				const dataDir = process.env.BRAINSTORM_DATA_DIR
+					? join(process.env.BRAINSTORM_DATA_DIR, 'attachments')
+					: join(import.meta.dir, '../../api_sandbox/data');
 				if (!existsSync(dataDir)) {
 					mkdirSync(dataDir, { recursive: true });
 				}
@@ -279,7 +348,8 @@ const server = Bun.serve<{ id: string }>({
 
 	websocket: {
 		open(ws) {
-			console.log(`[WebSocket] Client connected (id: ${ws.data.id})`);
+			connectedClients.add(ws);
+			console.log(`[WebSocket] Client connected (id: ${ws.data.id}, active clients: ${connectedClients.size})`);
 			sendWs(ws, {
 				type: 'SERVER_READY',
 				serverVersion: '0.1.0',
@@ -300,6 +370,7 @@ const server = Bun.serve<{ id: string }>({
 						const tabs = repos.getAllTabs();
 						const settings = repos.getSettings();
 						const services = supervisor.getStatus();
+						const plugins = await pluginManager.list();
 						sendWs(ws, {
 							type: 'SETTINGS_LOADED',
 							projects,
@@ -307,8 +378,9 @@ const server = Bun.serve<{ id: string }>({
 							conversations: tabs,
 							settings,
 							services,
-							models: AVAILABLE_MODELS
-						}, `${projects.length} projects, ${tabs.length} tabs, ${AVAILABLE_MODELS.length} models`);
+							models: AVAILABLE_MODELS,
+							plugins
+						}, `${projects.length} projects, ${tabs.length} tabs, ${AVAILABLE_MODELS.length} models, ${plugins.length} plugins`);
 						break;
 					}
 
@@ -334,7 +406,7 @@ const server = Bun.serve<{ id: string }>({
 						const name = payload.name || payload.title || 'New Conversation';
 						console.log(`[WebSocket] Incoming <- ${ws.data.id} [${payload.type}] project="${projectId}", name="${name}"`);
 						const tab = repos.createTab(projectId, name);
-						sendWs(ws, {
+						broadcastWs({
 							type: 'TAB_CREATED',
 							tab,
 							conversation: tab
@@ -345,7 +417,7 @@ const server = Bun.serve<{ id: string }>({
 					case 'TAB_RENAME': {
 						console.log(`[WebSocket] Incoming <- ${ws.data.id} [TAB_RENAME] tabId="${payload.tabId}", newName="${payload.name}"`);
 						repos.renameTab(payload.tabId, payload.name);
-						sendWs(ws, {
+						broadcastWs({
 							type: 'TAB_RENAMED',
 							tabId: payload.tabId,
 							name: payload.name
@@ -357,12 +429,31 @@ const server = Bun.serve<{ id: string }>({
 					case 'CONVERSATION_DELETE': {
 						const id = payload.tabId || payload.conversationId;
 						console.log(`[WebSocket] Incoming <- ${ws.data.id} [${payload.type}] tabId="${id}"`);
-						if (id) repos.deleteTab(id);
-						sendWs(ws, {
+						if (id) {
+							deleteProviderSessions(id);
+							repos.deleteTab(id);
+						}
+						broadcastWs({
 							type: 'TAB_DELETED',
 							tabId: id,
 							conversationId: id
 						}, `tabId="${id}"`);
+						break;
+					}
+
+					case 'TAB_ARCHIVE': {
+						const id = payload.tabId || payload.conversationId;
+						const archived = payload.archived !== false;
+						console.log(`[WebSocket] Incoming <- ${ws.data.id} [TAB_ARCHIVE] tabId="${id}", archived=${archived}`);
+						if (id) {
+							repos.setTabArchived(id, archived);
+							broadcastWs({
+								type: 'TAB_ARCHIVED',
+								tabId: id,
+								conversationId: id,
+								archived
+							}, `tabId="${id}", archived=${archived}`);
+						}
 						break;
 					}
 
@@ -375,7 +466,7 @@ const server = Bun.serve<{ id: string }>({
 							payload.metadata,
 							payload.icon
 						);
-						sendWs(ws, {
+						broadcastWs({
 							type: 'PROJECT_CREATED',
 							project
 						}, `projectId="${project.id}", name="${project.name}"`);
@@ -445,6 +536,14 @@ const server = Bun.serve<{ id: string }>({
 									totalTokens: count,
 									model: effectiveModel
 								}, `messageId="${event.data.messageId}", streamed ${tokenCount} chunks, model="${effectiveModel}", tokens used: ${count}`);
+
+								// Broadcast to other windows that tab has updated messages
+								broadcastWs({
+									type: 'TAB_UPDATED',
+									tabId: effectiveTabId,
+									conversationId: effectiveTabId,
+									lastMessageId: event.data.messageId
+								}, `tabId="${effectiveTabId}" updated`);
 							}
 						}
 						break;
@@ -452,7 +551,7 @@ const server = Bun.serve<{ id: string }>({
 
 					case 'MCP_REQUEST': {
 						console.log(`[WebSocket] Incoming <- ${ws.data.id} [MCP_REQUEST] method="${payload.rpc?.method}"`);
-						const rpcRes = mcpServer.handleJsonRpc(payload.rpc);
+						const rpcRes = await mcpServer.handleJsonRpc(payload.rpc);
 						sendWs(ws, {
 							type: 'MCP_RESPONSE',
 							rpc: rpcRes
@@ -460,8 +559,53 @@ const server = Bun.serve<{ id: string }>({
 						break;
 					}
 
-					case 'SETTINGS_SET': {
-						console.log(`[WebSocket] Incoming <- ${ws.data.id} [SETTINGS_SET] key="${payload.key}", value="${payload.value}"`);
+					case 'PLUGIN_LIST': {
+						const plugins = await pluginManager.list();
+						broadcastWs({ type: 'PLUGINS_UPDATED', plugins });
+						break;
+					}
+
+					case 'PLUGIN_INSTALL': {
+						// Either { url } (git repo with plugin.json) or { manifest } (inline).
+						try {
+							if (payload.url) {
+								const manifest = await pluginManager.installFromGit(payload.url);
+								console.log(`[WebSocket] Installed plugin '${manifest.id}' from ${payload.url}`);
+							} else if (payload.manifest) {
+								await pluginManager.register(payload.manifest);
+							} else {
+								throw new Error('PLUGIN_INSTALL requires "url" or "manifest"');
+							}
+						} catch (err: any) {
+							broadcastWs({ type: 'PLUGIN_ERROR', error: String(err.message || err), source: 'install' });
+						}
+						broadcastWs({ type: 'PLUGINS_UPDATED', plugins: await pluginManager.list() });
+						break;
+					}
+
+					case 'PLUGIN_REMOVE': {
+						try {
+							await pluginManager.remove(payload.id);
+						} catch (err: any) {
+							broadcastWs({ type: 'PLUGIN_ERROR', error: String(err.message || err), source: 'remove' });
+						}
+						broadcastWs({ type: 'PLUGINS_UPDATED', plugins: await pluginManager.list() });
+						break;
+					}
+
+					case 'PLUGIN_TOGGLE': {
+						try {
+							await pluginManager.toggle(payload.id, !!payload.enabled);
+						} catch (err: any) {
+							broadcastWs({ type: 'PLUGIN_ERROR', error: String(err.message || err), source: 'toggle' });
+						}
+						broadcastWs({ type: 'PLUGINS_UPDATED', plugins: await pluginManager.list() });
+						break;
+					}
+
+					case 'SETTINGS_SET':
+					case 'SETTING_SET': {
+						console.log(`[WebSocket] Incoming <- ${ws.data.id} [${payload.type}] key="${payload.key}", value="${payload.value}"`);
 						repos.setSetting(payload.key, String(payload.value));
 						sendWs(ws, {
 							type: 'SETTINGS_UPDATED',
@@ -481,7 +625,8 @@ const server = Bun.serve<{ id: string }>({
 		},
 
 		close(ws) {
-			console.log(`[WebSocket] Client disconnected (id: ${ws.data.id})`);
+			connectedClients.delete(ws);
+			console.log(`[WebSocket] Client disconnected (id: ${ws.data.id}, remaining clients: ${connectedClients.size})`);
 		}
 	}
 });

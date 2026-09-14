@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --cwd client/tauri dev",
-    "build": "bun run --cwd client/tauri build",
+    "build": "bun run build:sidecar && bun run --cwd client/tauri build",
+    "build:sidecar": "bun scripts/build-sidecar.ts",
     "web:dev": "bun run --cwd client/web dev",
     "web:build": "bun run --cwd client/web build",
     "orchestrator:dev": "bun run --cwd orchestrator dev",

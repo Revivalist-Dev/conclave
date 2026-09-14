@@ -1,14 +1,17 @@
 import { Database } from 'bun:sqlite';
 import { join } from 'path';
-import { readFileSync, existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import { newProjectId, newTabId, newMessageId, newToolStepId } from './helper';
+import { SCHEMA_SQL } from './schema';
 
-const DB_DIR = join(import.meta.dir, '../../data');
-const DB_PATH = join(DB_DIR, 'brainstorm.db');
-const SCHEMA_PATH = join(import.meta.dir, 'schema.sql');
+// BRAINSTORM_DATA_DIR is set by the Tauri sidecar loader in production so the
+// database lives in the OS app-data dir; dev falls back to the repo data dir
+// (a compiled sidecar cannot resolve paths via import.meta.dir).
+export const DATA_DIR = process.env.BRAINSTORM_DATA_DIR || join(import.meta.dir, '../../data');
+const DB_PATH = join(DATA_DIR, 'brainstorm.db');
 
-if (!existsSync(DB_DIR)) {
-	mkdirSync(DB_DIR, { recursive: true });
+if (!existsSync(DATA_DIR)) {
+	mkdirSync(DATA_DIR, { recursive: true });
 }
 
 export const db = new Database(DB_PATH);
@@ -25,8 +28,14 @@ export function nextSeq(name: string): number {
 
 // Initialize schema
 export function initDatabase() {
-	const schema = readFileSync(SCHEMA_PATH, 'utf-8');
-	db.exec(schema);
+	db.exec(SCHEMA_SQL);
+
+	// Migrations for databases created before a column existed
+	try {
+		db.exec('ALTER TABLE tabs ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+	} catch {
+		// column already exists
+	}
 
 	// Migrate legacy 'General' project name to 'Discussions' with 'MessagesSquare' icon
 	db.prepare("UPDATE projects SET name = 'Discussions', icon = 'MessagesSquare' WHERE name = 'General'").run();
@@ -63,6 +72,21 @@ export function initDatabase() {
 
 // Data access helpers
 export const repos = {
+	// === Plugins ===
+	getPlugins: () => db.query('SELECT * FROM plugins ORDER BY created_at ASC').all() as any[],
+	upsertPlugin: (p: { id: string; name: string; type: string; enabled: boolean; manifest: string; status: string; last_error: string | null }) => {
+		const now = Date.now();
+		db.prepare(
+			`INSERT OR REPLACE INTO plugins (id, name, type, enabled, manifest, status, last_error, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM plugins WHERE id = ?), ?), ?)`
+		).run(p.id, p.name, p.type, p.enabled ? 1 : 0, p.manifest, p.status, p.last_error, p.id, now, now);
+	},
+	deletePlugin: (id: string) => db.prepare('DELETE FROM plugins WHERE id = ?').run(id),
+	setPluginStatus: (id: string, status: string, lastError?: string | null) => {
+		db.prepare('UPDATE plugins SET status = ?, last_error = ?, updated_at = ? WHERE id = ?')
+			.run(status, lastError ?? null, Date.now(), id);
+	},
+
 	// === Projects ===
 	createProject: (name: string, directoryPath?: string, skills?: string[], metadata?: any, icon = 'Folder') => {
 		const id = newProjectId(nextSeq('project'));
@@ -113,9 +137,16 @@ export const repos = {
 	getAllTabs: () => {
 		return db.query('SELECT * FROM tabs ORDER BY updated_at DESC').all() as any[];
 	},
+	getConversations: () => {
+		return db.query('SELECT * FROM tabs ORDER BY updated_at DESC').all() as any[];
+	},
 	renameTab: (tabId: string, name: string) => {
 		const now = Date.now();
 		db.prepare('UPDATE tabs SET name = ?, updated_at = ? WHERE id = ?').run(name, now, tabId);
+	},
+	setTabArchived: (tabId: string, archived: boolean) => {
+		const now = Date.now();
+		db.prepare('UPDATE tabs SET archived = ?, updated_at = ? WHERE id = ?').run(archived ? 1 : 0, now, tabId);
 	},
 	updateTabLastResponse: (tabId: string, snippet: string, model?: string) => {
 		const now = Date.now();
@@ -202,6 +233,10 @@ export const repos = {
 		const result: Record<string, string> = {};
 		for (const r of rows) result[r.key] = r.value;
 		return result;
+	},
+	getSetting: (key: string): string | null => {
+		const row = db.query('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | null;
+		return row?.value ?? null;
 	},
 	setSetting: (key: string, value: string) => {
 		const now = Date.now();

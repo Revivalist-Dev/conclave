@@ -77,9 +77,10 @@ export class LlmRouter {
 			console.error(`[LlmRouter] Provider ${providerAdapter.name} error: ${cleanError}`);
 
 			const errorNotice = `**${providerAdapter.name} Error**: ${cleanError}`;
-			fullResponse = fullResponse ? `${fullResponse}\n\n> ${errorNotice}` : `> ${errorNotice}`;
+			const errorChunk = fullResponse ? `\n\n> ${errorNotice}` : `> ${errorNotice}`;
+			fullResponse += errorChunk;
 
-			yield { type: 'token', data: { token: fullResponse, tabId: effectiveTabId, conversationId: effectiveTabId } };
+			yield { type: 'token', data: { token: errorChunk, tabId: effectiveTabId, conversationId: effectiveTabId } };
 			yield { type: 'error', data: { error: cleanError, tabId: effectiveTabId, conversationId: effectiveTabId } };
 		}
 

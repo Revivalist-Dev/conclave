@@ -1,19 +1,26 @@
 import { harness } from '../stores/harness.svelte';
+import { isTauriEnvironment, tauriInvoke, listenTauriEvent } from './windowManager';
 
 export type SocketStatus = 'connected' | 'connecting' | 'disconnected';
 
+/**
+ * JS-side orchestrator logic. The WebSocket transport itself lives in the Tauri
+ * process (src-tauri/src/orchestrator_ws.rs): server traffic arrives via the
+ * `orchestrator-message` event, outbound payloads go through the `ws_send`
+ * invoke (Rust queues and flushes them while offline), and connection state
+ * changes arrive via `orchestrator-status`. Reconnects with backoff are
+ * handled natively; this module only decides what the messages mean.
+ */
 class OrchestratorSocketClient {
 	status = $state<SocketStatus>('disconnected');
 	services = $state<any[]>([]);
-	url = $state<string>('ws://127.0.0.1:4000/ws');
+	url = 'ws://127.0.0.1:4000/ws';
 
-	private socket: WebSocket | null = null;
-	private reconnectTimer: any = null;
+	private started = false;
 	private pendingResolvers: Map<string | number, (res: any) => void> = new Map();
 	private rpcIdCounter = 1;
 
 	constructor() {
-		// Only run in browser environment
 		if (typeof window !== 'undefined') {
 			(window as any).__orchestratorSocket = this;
 			this.connect();
@@ -21,79 +28,92 @@ class OrchestratorSocketClient {
 	}
 
 	public connect() {
-		if (typeof window === 'undefined') return;
-		if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+		if (this.started || typeof window === 'undefined') return;
+		this.started = true;
+
+		if (!isTauriEnvironment()) {
+			console.info('[OrchestratorBridge] Not running inside Tauri; orchestrator bridge unavailable.');
 			return;
 		}
 
 		this.status = 'connecting';
-		try {
-			this.socket = new WebSocket(this.url);
 
-			this.socket.onopen = () => {
-				this.status = 'connected';
-				console.log('[WebSocket] Connected to brAInstorm Orchestrator');
-				if (this.reconnectTimer) {
-					clearTimeout(this.reconnectTimer);
-					this.reconnectTimer = null;
+		listenTauriEvent('orchestrator-message', (payload: any) => {
+			this.handleMessage(payload);
+		});
+
+		listenTauriEvent('orchestrator-status', (payload: any) => {
+			// Rust serializes the status enum as a bare JSON string ("connected");
+			// tolerate a {"status": ...} wrapper too.
+			const next = typeof payload === 'string' ? payload : payload?.status;
+			if (next === 'connected' || next === 'connecting' || next === 'disconnected') {
+				const wasConnected = this.status === 'connected';
+				this.status = next;
+				// Handshake/refresh is JS logic: run it on every (re)connection.
+				if (next === 'connected' && !wasConnected) this.onConnected();
+			}
+		});
+
+		// Sync with whatever state the Rust supervisor is already in. A window that
+		// loads after the connection was established missed the SERVER_READY
+		// broadcast, so it requests settings directly (queued natively if offline).
+		tauriInvoke<SocketStatus>('ws_status')
+			.then((initial) => {
+				if (initial === 'connected' || initial === 'connecting' || initial === 'disconnected') {
+					const wasConnected = this.status === 'connected';
+					this.status = initial;
+					if (initial === 'connected' && !wasConnected) this.onConnected();
 				}
-			};
-
-			this.socket.onmessage = (event) => {
-				this.handleMessage(event.data);
-			};
-
-			this.socket.onclose = () => {
-				this.status = 'disconnected';
-				this.scheduleReconnect();
-			};
-
-			this.socket.onerror = () => {
-				// Browser already logs connection refusal; gracefully close to trigger reconnect
-				try {
-					this.socket?.close();
-				} catch {}
-			};
-		} catch (err) {
-			this.status = 'disconnected';
-			this.scheduleReconnect();
-		}
+			})
+			.catch(() => {});
 	}
 
+	/**
+	 * Handshake + state refresh, driven from JS on every (re)connection.
+	 * Sends are queued by the Rust transport while offline, so ordering is safe.
+	 */
+	private onConnected() {
+		this.send({ type: 'CLIENT_INIT', clientVersion: '0.1.0' });
+		this.send({ type: 'LOAD_SETTINGS', clientVersion: '0.1.0' });
+		this.send({ type: 'PLUGIN_LIST' });
+	}
+
+	/** Ask the Rust supervisor to skip its backoff and reconnect immediately. */
 	public manualReconnect() {
-		if (this.reconnectTimer) {
-			clearTimeout(this.reconnectTimer);
-			this.reconnectTimer = null;
-		}
-		if (this.socket) {
-			try {
-				this.socket.close();
-			} catch {}
-			this.socket = null;
-		}
-		this.connect();
+		if (!isTauriEnvironment()) return;
+		tauriInvoke('ws_reconnect').catch(() => {});
 	}
 
-	private scheduleReconnect() {
-		if (this.reconnectTimer) return;
-		this.reconnectTimer = setTimeout(() => {
-			this.reconnectTimer = null;
-			this.connect();
-		}, 3000);
+	/**
+	 * Send a payload to the orchestrator. Fire-and-forget: when the socket is
+	 * down the payload is queued natively and flushed after reconnecting.
+	 * Returns whether the socket was connected at call time.
+	 */
+	public send(payload: any): boolean {
+		if (typeof window === 'undefined') return false;
+		tauriInvoke('ws_send', { payload }).catch((err) => {
+			console.warn('[OrchestratorBridge] ws_send failed:', err);
+		});
+		return this.status === 'connected';
 	}
 
-	public send(payload: any) {
-		if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-			this.socket.send(JSON.stringify(payload));
-			return true;
-		}
-		return false;
+	/** JSON-RPC request over the orchestrator connection (MCP tooling). */
+	public async callMcp(method: string, params?: any): Promise<any> {
+		const id = this.rpcIdCounter++;
+		const rpc = { jsonrpc: '2.0', id, method, params };
+
+		return new Promise((resolve) => {
+			this.pendingResolvers.set(id, resolve);
+			const sent = this.send({ type: 'MCP_REQUEST', rpc });
+			if (!sent) {
+				this.pendingResolvers.delete(id);
+				resolve({ jsonrpc: '2.0', id, error: { code: -32000, message: 'WebSocket not connected' } });
+			}
+		});
 	}
 
-	private handleMessage(raw: string) {
+	private handleMessage(data: any) {
 		try {
-			const data = JSON.parse(raw);
-
 			switch (data.type) {
 				case 'SERVER_READY': {
 					// 1. Server announced readiness; client acknowledges by requesting environment settings
@@ -102,9 +122,13 @@ class OrchestratorSocketClient {
 				}
 
 				case 'SETTINGS_LOADED': {
-					// 2. Server returned complete environment (projects, tabs, models, settings)
+					// 2. Server returned complete environment (projects, tabs, models, settings, plugins)
 					if (data.services) {
 						this.services = data.services;
+					}
+					if (data.plugins) {
+						harness.plugins = data.plugins;
+						harness.syncPluginModels(data.plugins);
 					}
 					harness.initFromSettings(data);
 					break;
@@ -130,6 +154,34 @@ class OrchestratorSocketClient {
 				case 'TAB_DELETED':
 				case 'CONVERSATION_DELETED': {
 					harness.handleTabDeleted(data.tabId || data.conversationId);
+					break;
+				}
+
+				case 'TAB_UPDATED': {
+					// Refetch regardless of which tab is active: this keeps hidden
+					// windows populated (e.g. the fullscreen chat while in HUD mode,
+					// including responses for tabs that were never opened there).
+					const targetId = data.tabId || data.conversationId;
+					if (targetId) {
+						harness.fetchTabMessages(targetId, 7);
+					}
+					break;
+				}
+
+				case 'TAB_ARCHIVED': {
+					harness.handleTabArchived(data.tabId || data.conversationId, !!data.archived);
+					break;
+				}
+
+				case 'PLUGINS_UPDATED': {
+					harness.plugins = data.plugins || [];
+					harness.pluginError = '';
+					harness.syncPluginModels(harness.plugins);
+					break;
+				}
+
+				case 'PLUGIN_ERROR': {
+					harness.pluginError = data.error || 'Unknown plugin error';
 					break;
 				}
 
@@ -240,22 +292,8 @@ class OrchestratorSocketClient {
 				}
 			}
 		} catch (err: any) {
-			console.error('Error handling WebSocket message:', err.message);
+			console.error('Error handling orchestrator message:', err?.message);
 		}
-	}
-
-	public async callMcp(method: string, params?: any): Promise<any> {
-		const id = this.rpcIdCounter++;
-		const rpc = { jsonrpc: '2.0', id, method, params };
-
-		return new Promise((resolve) => {
-			this.pendingResolvers.set(id, resolve);
-			const sent = this.send({ type: 'MCP_REQUEST', rpc });
-			if (!sent) {
-				this.pendingResolvers.delete(id);
-				resolve({ jsonrpc: '2.0', id, error: { code: -32000, message: 'WebSocket not connected' } });
-			}
-		});
 	}
 }
 
