@@ -9,18 +9,22 @@
 
 	let { children } = $props();
 
-	async function refreshActiveThread(targetTabId?: string | null) {
-		const active =
-			targetTabId ||
-			(typeof localStorage !== 'undefined' ? localStorage.getItem('brainstorm_active_tab') : null) ||
-			harness.activeConversationId;
+	let refreshDebounceTimer: any = null;
 
-		if (active) {
-			harness.selectConversation(active);
-			await harness.fetchTabMessages(active, 7);
-		} else {
-			await harness.loadInitialData();
-		}
+	function refreshActiveThread(targetTabId?: string | null) {
+		if (refreshDebounceTimer) clearTimeout(refreshDebounceTimer);
+		refreshDebounceTimer = setTimeout(async () => {
+			const active =
+				targetTabId ||
+				(typeof localStorage !== 'undefined' ? localStorage.getItem('brainstorm_active_tab') : null) ||
+				harness.activeConversationId;
+
+			if (active) {
+				harness.selectConversation(active);
+			} else {
+				await harness.loadInitialData();
+			}
+		}, 150);
 	}
 
 	onMount(() => {
@@ -65,6 +69,7 @@
 		document.addEventListener('visibilitychange', onVisibilityChange);
 
 		return () => {
+			if (refreshDebounceTimer) clearTimeout(refreshDebounceTimer);
 			if (unlistenSwitch) unlistenSwitch();
 			if (unlistenRefresh) unlistenRefresh();
 			window.removeEventListener('storage', onStorage);

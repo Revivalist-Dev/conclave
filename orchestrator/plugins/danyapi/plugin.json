@@ -19,7 +19,7 @@
 		"tools": [
 			{
 				"name": "ask_deepseek",
-				"description": "Ask DeepSeek (via DanyAPI) a question. Uses the shared MCP thread; the session_id is forwarded to DanyAPI.",
+				"description": "Ask DeepSeek (via DanyAPI) a question. Messages are stored in the \"deepseek\" tab (created if missing); the session_id is forwarded to DanyAPI.",
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -31,7 +31,7 @@
 			},
 			{
 				"name": "ask_qwen",
-				"description": "Ask Qwen (via DanyAPI) a question. Uses the shared MCP thread; the session_id is forwarded to DanyAPI.",
+				"description": "Ask Qwen (via DanyAPI) a question. Messages are stored in the \"qwen\" tab (created if missing); the session_id is forwarded to DanyAPI.",
 				"inputSchema": {
 					"type": "object",
 					"properties": {

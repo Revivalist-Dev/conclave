@@ -1,30 +1,79 @@
-// DanyAPI MCP scaffold: implements ask_deepseek / ask_qwen by calling the
-// DanyAPI OpenAI-compatible endpoint. Runs inside the orchestrator.
-// (Seeded into <data>/plugins/danyapi/mcp.js at boot; this checked-in copy is
-//  the editable source of truth — re-seed by deleting the seeded file.)
+// DanyAPI MCP scaffold: implements ask_deepseek / ask_qwen / ask_zai
+// by calling the DanyAPI OpenAI-compatible endpoint. Runs inside orchestrator.
 export async function call(toolName, args, ctx) {
-	var question = String((args && args.question) || '').trim();
-	if (!question) return { content: [{ type: 'text', text: 'No question provided.' }], isError: true };
-	var sessionId = String((args && args.session_id) || 'default');
-	var endpoint = ctx.setting('deepseek_endpoint', 'http://127.0.0.1:8000/v1');
-	var model = toolName === 'ask_qwen' ? 'qwen3.7-plus' : ctx.setting('deepseek_model', 'deepseek-v4-flash');
+	const tool = String(toolName || '').toLowerCase();
+	let tabName = 'default';
+	let model = ctx.setting('deepseek_model', 'deepseek-v4-flash');
 
-	// One shared MCP thread: created if missing, reused afterwards.
-	var thread = ctx.getOrCreateThread('MCP');
+	if (tool.includes('qwen')) {
+		tabName = 'qwen';
+		model = ctx.setting('qwen_model', 'qwen3.7-plus');
+	} else if (tool.includes('deepseek')) {
+		tabName = 'deepseek';
+		model = ctx.setting('deepseek_model', 'deepseek-v4-flash');
+	} else if (tool.includes('zai')) {
+		tabName = 'zai';
+		model = ctx.setting('zai_model', 'zai');
+	} else {
+		tabName = tool.replace(/^plugin_[^_]+_/, '').replace(/^ask_/, '') || 'default';
+	}
+
+	const question = String(args?.question || '').trim();
+	if (!question) {
+		return {
+			content: [{ type: 'text', text: 'No question provided.' }],
+			isError: true,
+			tab_name: tabName,
+			tool_name: toolName
+		};
+	}
+
+	const thread = ctx.getOrCreateThread(tabName);
+	const sessionId = String(args?.session_id || thread.id);
+	const endpoint = ctx.setting('deepseek_endpoint', 'http://127.0.0.1:8000/v1');
+
 	ctx.addMessage(thread.id, 'user', question, model);
 
-	var res = await fetch(endpoint + '/chat/completions', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ model: model, messages: [{ role: 'user', content: question }], session_id: sessionId })
-	});
-	if (!res.ok) {
-		var errMsg = 'DanyAPI responded ' + res.status;
-		ctx.addMessage(thread.id, 'assistant', '> ' + errMsg, model);
-		return { content: [{ type: 'text', text: errMsg }], isError: true };
+	let res;
+	try {
+		res = await fetch(`${endpoint}/chat/completions`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				model,
+				messages: [{ role: 'user', content: question }],
+				session_id: sessionId
+			})
+		});
+	} catch (fetchErr) {
+		const errDetail = `Failed to reach DanyAPI at ${endpoint}: ${fetchErr?.message || String(fetchErr)}`;
+		ctx.addMessage(thread.id, 'assistant', `> ${errDetail}`, model);
+		return {
+			content: [{ type: 'text', text: errDetail }],
+			isError: true,
+			tab_name: tabName,
+			tool_name: toolName
+		};
 	}
-	var data = await res.json();
-	var answer = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || JSON.stringify(data).slice(0, 2000);
+
+	if (!res.ok) {
+		const errMsg = `DanyAPI responded ${res.status}`;
+		ctx.addMessage(thread.id, 'assistant', `> ${errMsg}`, model);
+		return {
+			content: [{ type: 'text', text: errMsg }],
+			isError: true,
+			tab_name: tabName,
+			tool_name: toolName
+		};
+	}
+
+	const data = await res.json();
+	const answer = data?.choices?.[0]?.message?.content || JSON.stringify(data).slice(0, 2000);
 	ctx.addMessage(thread.id, 'assistant', answer, model);
-	return { content: [{ type: 'text', text: answer }] };
+
+	return {
+		content: [{ type: 'text', text: answer }],
+		tab_name: tabName,
+		tool_name: toolName
+	};
 }

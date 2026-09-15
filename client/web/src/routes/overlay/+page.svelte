@@ -363,7 +363,7 @@
 	async function popExternalResponse(tabId: string | null, model?: string) {
 		if (!tabId) return;
 		harness.selectConversation(tabId);
-		await harness.fetchTabMessages(tabId);
+		await harness.fetchTabMessages(tabId, 7, true);
 		const msgs = harness.activeConversation?.messages || [];
 		const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant' && m.content);
 		if (!lastAssistant) return;

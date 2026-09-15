@@ -50,7 +50,8 @@
     "active": true,
     "targets": "all",
     "externalBin": [
-      "binaries/orchestrator"
+      "binaries/orchestrator",
+      "binaries/brainstorm-mcp"
     ],
     "icon": [
       "icons/32x32.png",

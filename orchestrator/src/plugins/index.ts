@@ -83,9 +83,12 @@ class McpStdioClient {
 			if (text) console.log(`[Plugins:${this.manifest.id}] ${text}`);
 		});
 		this.child.on('exit', (code) => {
-			this.status = 'failed';
-			this.error = `MCP server process exited (code ${code ?? 'signal'})`;
+			if (this.status !== 'stopped') {
+				this.status = 'failed';
+				this.error = `MCP server process exited (code ${code ?? 'signal'})`;
+			}
 			this.child = null;
+			this.rejectPending(`MCP server '${this.manifest.id}' process exited (code ${code ?? 'signal'})`);
 		});
 
 		await this.request(
@@ -149,10 +152,19 @@ class McpStdioClient {
 		this.child?.stdin?.write(JSON.stringify({ jsonrpc: '2.0', method }) + '\n');
 	}
 
+	private rejectPending(reason: string) {
+		for (const [id, p] of this.pending) {
+			clearTimeout(p.timer);
+			p.reject(new Error(reason));
+		}
+		this.pending.clear();
+	}
+
 	stop() {
+		this.status = 'stopped';
+		this.rejectPending(`MCP server '${this.manifest.id}' stopped`);
 		this.child?.kill();
 		this.child = null;
-		this.status = 'stopped';
 		this.tools = [];
 	}
 }
@@ -366,11 +378,10 @@ class PluginManager {
 	}
 
 	/**
-	 * Route a namespaced tools/call: a plugin's tool relays to that plugin's
+	 * Route a namespaced or aliased tools/call: a plugin's tool relays to that plugin's
 	 * server/handler; anything else falls through to the built-in tools.
 	 */
 	async callTool(name: string, args: any): Promise<{ content: any[]; isError?: boolean } | null> {
-		if (!name.startsWith(TOOL_PREFIX)) return null;
 		// Longest owning prefix wins, so plugin ids that prefix each other can't misroute.
 		const candidates: {
 			prefix: string;
@@ -380,17 +391,25 @@ class PluginManager {
 
 		for (const [id, client] of this.clients) {
 			const prefix = `${TOOL_PREFIX}${id}_`;
-			if (!name.startsWith(prefix)) continue;
-			const toolName = name.slice(prefix.length);
+			const isPrefixed = name.startsWith(prefix);
+			const toolName = isPrefixed ? name.slice(prefix.length) : name;
 			const owns = client.status === 'running' && client.tools.some((t) => t.name === toolName);
-			candidates.push({
-				prefix,
-				owns,
-				run: async () => {
-					const res = await client.request('tools/call', { name: toolName, arguments: args });
-					return res.result ?? { content: [{ type: 'text', text: 'Empty response' }] };
-				}
-			});
+			if (isPrefixed || owns) {
+				candidates.push({
+					prefix: isPrefixed ? prefix : '',
+					owns,
+					run: async () => {
+						const res = await client.request('tools/call', { name: toolName, arguments: args });
+						if (res?.error) {
+							return {
+								content: [{ type: 'text', text: res.error.message || 'Plugin tool error' }],
+								isError: true
+							};
+						}
+						return res?.result ?? { content: [{ type: 'text', text: 'Empty response' }] };
+					}
+				});
+			}
 		}
 
 		for (const row of repos.getPlugins() as any[]) {
@@ -404,19 +423,21 @@ class PluginManager {
 			const scaffold = this.scaffolds.get(manifest.id);
 			if (!scaffold) continue;
 			const prefix = `${TOOL_PREFIX}${manifest.id}_`;
-			if (!name.startsWith(prefix)) continue;
-			const toolName = name.slice(prefix.length);
+			const isPrefixed = name.startsWith(prefix);
+			const toolName = isPrefixed ? name.slice(prefix.length) : name;
 			const owns = manifest.mcp.tools.some((t) => t.name === toolName);
-			const ctx = this.scaffoldContext(manifest);
-			candidates.push({
-				prefix,
-				owns,
-				run: async () => {
-					const res = await scaffold.call(toolName, args, ctx);
-					if (typeof res === 'string') return { content: [{ type: 'text', text: res }] };
-					return res ?? { content: [{ type: 'text', text: 'Empty response' }] };
-				}
-			});
+			if (isPrefixed || owns) {
+				const ctx = this.scaffoldContext(manifest);
+				candidates.push({
+					prefix: isPrefixed ? prefix : '',
+					owns,
+					run: async () => {
+						const res = await scaffold.call(toolName, args, ctx);
+						if (typeof res === 'string') return { content: [{ type: 'text', text: res }] };
+						return res ?? { content: [{ type: 'text', text: 'Empty response' }] };
+					}
+				});
+			}
 		}
 
 		candidates.sort((a, b) => b.prefix.length - a.prefix.length);
@@ -477,15 +498,16 @@ class PluginManager {
 		} else if (manifest.type === 'docker') {
 			// Docker plugins are executed by the supervisor's docker-compose flow.
 			const service = manifest.serviceName || 'DanyAPI';
-			await supervisor.startService(service);
+			try {
+				await supervisor.startService(service);
+			} catch (err: any) {
+				console.warn(`[Plugins] Could not start docker service '${service}': ${err.message}`);
+			}
 			const live = supervisor.getStatus().find((s: any) => s.name === service);
 			const status = live?.status || 'stopped';
 			this.procState.set(id, { status, error: live?.error || null });
 			repos.setPluginStatus(id, status, live?.error || null);
 			console.log(`[Plugins] '${id}' docker service '${service}': ${status}`);
-			if (status !== 'running') {
-				throw new Error(live?.error || `docker service '${service}': ${status}`);
-			}
 		} else {
 			throw new Error(`Unsupported plugin type: ${manifest.type}`);
 		}
@@ -522,11 +544,13 @@ class PluginManager {
 		return {
 			setting: (key: string, fallback = '') => repos.getSetting(key) ?? fallback,
 			getOrCreateThread: (name: string) => {
-				const existing = (repos.getAllTabs() as any[]).find((t) => t.name === name);
+				const existing = (repos.getAllTabs() as any[]).find((t) => t.name.toLowerCase() === name.toLowerCase());
 				if (existing) return existing;
 				const project = (repos.getProjects() as any[])[0];
 				if (!project) throw new Error('No project available to open a thread');
-				return repos.createTab(project.id, name);
+				const tab = repos.createTab(project.id, name);
+				pluginBus.emit('tab-created', { tab });
+				return tab;
 			},
 			addMessage: (tabId: string, role: 'user' | 'assistant', content: string, model?: string) => {
 				repos.addMessage(tabId, role, content, undefined, model);

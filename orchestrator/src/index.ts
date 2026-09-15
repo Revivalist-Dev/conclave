@@ -22,11 +22,17 @@ pluginManager.restore().catch((e) => console.warn('[Plugins] Restore failed:', e
 
 // Plugin-generated threads (e.g. DanyAPI ask_* MCP threads) announce themselves
 // so open windows refresh the conversation.
+pluginBus.on('tab-created', ({ tab }) => {
+	broadcastWs({
+		type: 'TAB_CREATED',
+		tab
+	}, `tabId="${tab?.id}"`);
+});
+
 pluginBus.on('tab-updated', ({ tabId }) => {
 	broadcastWs({
 		type: 'TAB_UPDATED',
-		tabId,
-		conversationId: tabId
+		tabId
 	}, `tabId="${tabId}"`);
 });
 
@@ -74,10 +80,44 @@ export function broadcastWs(payload: any, detail?: string) {
 	}
 }
 
+function isAllowedOrigin(origin: string | null): boolean {
+	if (!origin) return true; // Direct tools, CLI, curl, internal connections
+	try {
+		const parsed = new URL(origin);
+		if (parsed.protocol === 'tauri:' || parsed.protocol === 'app:') return true;
+		if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === 'tauri.localhost') return true;
+	} catch {}
+	return false;
+}
+
+function getCorsHeaders(req: Request): Record<string, string> {
+	const origin = req.headers.get('origin');
+	return {
+		'Access-Control-Allow-Origin': origin && isAllowedOrigin(origin) ? origin : 'http://127.0.0.1',
+		'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+		'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+		'Vary': 'Origin'
+	};
+}
+
 const server = Bun.serve<{ id: string }>({
 	port: PORT,
 	async fetch(req, server) {
 		const url = new URL(req.url);
+
+		// Security: origin check against DNS rebinding / malicious browser origins
+		const origin = req.headers.get('origin');
+		if (!isAllowedOrigin(origin)) {
+			console.warn(`[Security] Blocked request from untrusted origin: ${origin}`);
+			return new Response('Forbidden: Untrusted Origin', { status: 403 });
+		}
+
+		// CORS Preflight
+		if (req.method === 'OPTIONS') {
+			return new Response(null, {
+				headers: getCorsHeaders(req)
+			});
+		}
 
 		// Handle WebSocket upgrade
 		if (url.pathname === '/ws') {
@@ -93,18 +133,24 @@ const server = Bun.serve<{ id: string }>({
 				try {
 					const body = await req.json();
 					const response = await mcpServer.handleJsonRpc(body);
+					if (response === null) {
+						return new Response(null, {
+							status: 204,
+							headers: getCorsHeaders(req)
+						});
+					}
 					return new Response(JSON.stringify(response), {
-						headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+						headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 					});
 				} catch (err: any) {
 					return new Response(
 						JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' } }),
-						{ headers: { 'Content-Type': 'application/json' }, status: 400 }
+						{ headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }, status: 400 }
 					);
 				}
 			}
 			return new Response(JSON.stringify({ status: 'MCP Endpoint Ready' }), {
-				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+				headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 			});
 		}
 
@@ -120,7 +166,7 @@ const server = Bun.serve<{ id: string }>({
 					tabsCount: repos.getAllTabs().length,
 					uptime: process.uptime()
 				}, null, 2),
-				{ headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
+				{ headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) } }
 			);
 		}
 
@@ -134,14 +180,14 @@ const server = Bun.serve<{ id: string }>({
 					services: supervisor.getStatus(),
 					models: AVAILABLE_MODELS
 				}),
-				{ headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
+				{ headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) } }
 			);
 		}
 
-		// API: Tabs (formerly conversations)
-		if (url.pathname === '/api/tabs' || url.pathname === '/api/conversations') {
+		// API: Tabs
+		if (url.pathname === '/api/tabs') {
 			return new Response(JSON.stringify(repos.getAllTabs()), {
-				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+				headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 			});
 		}
 
@@ -153,7 +199,7 @@ const server = Bun.serve<{ id: string }>({
 			const days = daysParam ? parseInt(daysParam, 10) : 7;
 			const messages = repos.getTabMessages(tabId, days);
 			return new Response(JSON.stringify(messages), {
-				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+				headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 			});
 		}
 
@@ -166,21 +212,21 @@ const server = Bun.serve<{ id: string }>({
 				repos.deleteTab(tabId);
 			}
 			return new Response(JSON.stringify({ success: true, tabId }), {
-				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+				headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 			});
 		}
 
 		// API: Projects
 		if (url.pathname === '/api/projects') {
 			return new Response(JSON.stringify(repos.getProjects()), {
-				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+				headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 			});
 		}
 
 		// API: Settings
 		if (url.pathname === '/api/settings') {
 			return new Response(JSON.stringify(repos.getSettings()), {
-				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+				headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 			});
 		}
 
@@ -190,18 +236,7 @@ const server = Bun.serve<{ id: string }>({
 			const msg = url.searchParams.get('msg');
 			console.log(`[CLIENT DIAGNOSTIC LOG] err="${err}" msg="${msg}"`);
 			return new Response(JSON.stringify({ ok: true }), {
-				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-			});
-		}
-
-		// CORS Preflight
-		if (req.method === 'OPTIONS') {
-			return new Response(null, {
-				headers: {
-					'Access-Control-Allow-Origin': '*',
-					'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-					'Access-Control-Allow-Headers': '*'
-				}
+				headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 			});
 		}
 
@@ -220,7 +255,7 @@ const server = Bun.serve<{ id: string }>({
 				if (files.length === 0) {
 					return new Response(JSON.stringify({ error: 'No file provided' }), {
 						status: 400,
-						headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+						headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 					});
 				}
 
@@ -317,7 +352,7 @@ const server = Bun.serve<{ id: string }>({
 						files: results
 					}), {
 						status: 502,
-						headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+						headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 					});
 				}
 
@@ -330,19 +365,19 @@ const server = Bun.serve<{ id: string }>({
 					sessionId,
 					files: results
 				}), {
-					headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+					headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 				});
 			} catch (err: any) {
 				console.error('[Upload Error]', err.message);
 				return new Response(JSON.stringify({ error: err.message }), {
 					status: 500,
-					headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+					headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 				});
 			}
 		}
 
 		return new Response('brAInstorm Orchestrator: Active', {
-			headers: { 'Access-Control-Allow-Origin': '*' }
+			headers: getCorsHeaders(req)
 		});
 	},
 
@@ -363,9 +398,8 @@ const server = Bun.serve<{ id: string }>({
 				const payload = JSON.parse(messageStr);
 
 				switch (payload.type) {
-					case 'LOAD_SETTINGS':
-					case 'CLIENT_INIT': {
-						console.log(`[WebSocket] Incoming <- ${ws.data.id} [${payload.type}] version="${payload.clientVersion || '0.1.0'}"`);
+					case 'LOAD_SETTINGS': {
+						console.log(`[WebSocket] Incoming <- ${ws.data.id} [LOAD_SETTINGS] version="${payload.clientVersion || '0.1.0'}"`);
 						const projects = repos.getProjects();
 						const tabs = repos.getAllTabs();
 						const settings = repos.getSettings();
@@ -375,7 +409,6 @@ const server = Bun.serve<{ id: string }>({
 							type: 'SETTINGS_LOADED',
 							projects,
 							tabs,
-							conversations: tabs,
 							settings,
 							services,
 							models: AVAILABLE_MODELS,
@@ -384,32 +417,28 @@ const server = Bun.serve<{ id: string }>({
 						break;
 					}
 
-					case 'TAB_FETCH':
-					case 'CONVERSATION_FETCH': {
-						const id = payload.tabId || payload.conversationId;
+					case 'TAB_FETCH': {
+						const id = payload.tabId;
 						const days = typeof payload.days === 'number' ? payload.days : 7;
-						console.log(`[WebSocket] Incoming <- ${ws.data.id} [${payload.type}] tabId="${id}", days=${days}`);
+						console.log(`[WebSocket] Incoming <- ${ws.data.id} [TAB_FETCH] tabId="${id}", days=${days}`);
 						const messages = repos.getTabMessages(id, days);
 						sendWs(ws, {
 							type: 'TAB_DETAIL',
 							tabId: id,
-							conversationId: id,
 							messages
 						}, `${messages.length} messages for tab "${id}"`);
 						break;
 					}
 
-					case 'TAB_CREATE':
-					case 'CONVERSATION_CREATE': {
+					case 'TAB_CREATE': {
 						const defaultProj = repos.getProjects()[0];
 						const projectId = payload.projectId || defaultProj?.id;
-						const name = payload.name || payload.title || 'New Conversation';
-						console.log(`[WebSocket] Incoming <- ${ws.data.id} [${payload.type}] project="${projectId}", name="${name}"`);
+						const name = payload.name || 'New Conversation';
+						console.log(`[WebSocket] Incoming <- ${ws.data.id} [TAB_CREATE] project="${projectId}", name="${name}"`);
 						const tab = repos.createTab(projectId, name);
 						broadcastWs({
 							type: 'TAB_CREATED',
-							tab,
-							conversation: tab
+							tab
 						}, `tabId="${tab.id}", name="${tab.name}" in project="${projectId}"`);
 						break;
 					}
@@ -425,24 +454,22 @@ const server = Bun.serve<{ id: string }>({
 						break;
 					}
 
-					case 'TAB_DELETE':
-					case 'CONVERSATION_DELETE': {
-						const id = payload.tabId || payload.conversationId;
-						console.log(`[WebSocket] Incoming <- ${ws.data.id} [${payload.type}] tabId="${id}"`);
+					case 'TAB_DELETE': {
+						const id = payload.tabId;
+						console.log(`[WebSocket] Incoming <- ${ws.data.id} [TAB_DELETE] tabId="${id}"`);
 						if (id) {
 							deleteProviderSessions(id);
 							repos.deleteTab(id);
 						}
 						broadcastWs({
 							type: 'TAB_DELETED',
-							tabId: id,
-							conversationId: id
+							tabId: id
 						}, `tabId="${id}"`);
 						break;
 					}
 
 					case 'TAB_ARCHIVE': {
-						const id = payload.tabId || payload.conversationId;
+						const id = payload.tabId;
 						const archived = payload.archived !== false;
 						console.log(`[WebSocket] Incoming <- ${ws.data.id} [TAB_ARCHIVE] tabId="${id}", archived=${archived}`);
 						if (id) {
@@ -450,7 +477,6 @@ const server = Bun.serve<{ id: string }>({
 							broadcastWs({
 								type: 'TAB_ARCHIVED',
 								tabId: id,
-								conversationId: id,
 								archived
 							}, `tabId="${id}", archived=${archived}`);
 						}
@@ -474,18 +500,17 @@ const server = Bun.serve<{ id: string }>({
 					}
 
 					case 'PROMPT_SEND': {
-						const { tabId, conversationId, chatId, sessionId, content, attachments, provider, model } = payload;
-						const effectiveTabId = tabId || conversationId || chatId || sessionId;
+						const { tabId, content, attachments, provider, model } = payload;
 						const promptSnippet = (content || '').slice(0, 45).replace(/\n/g, ' ');
 						const attachInfo = attachments?.length ? ` (${attachments.length} attachments)` : '';
-						console.log(`[WebSocket] Incoming <- ${ws.data.id} [PROMPT_SEND] tabId="${effectiveTabId}", provider="${provider || 'default'}", model="${model || 'default'}", prompt="${promptSnippet}..."${attachInfo}`);
+						console.log(`[WebSocket] Incoming <- ${ws.data.id} [PROMPT_SEND] tabId="${tabId}", provider="${provider || 'default'}", model="${model || 'default'}", prompt="${promptSnippet}..."${attachInfo}`);
 
 						let tokenCount = 0;
 						let totalTokensReported = 0;
 
 						// Stream response from LLM router
 						for await (const event of llmRouter.streamChat({
-							tabId: effectiveTabId,
+							tabId,
 							message: content,
 							attachments,
 							provider,
@@ -496,16 +521,14 @@ const server = Bun.serve<{ id: string }>({
 								ws.send(
 									JSON.stringify({
 										type: 'CHAT_TOKEN',
-										tabId: effectiveTabId,
-										conversationId: effectiveTabId,
+										tabId,
 										token: event.data.token
 									})
 								);
 							} else if (event.type === 'tool_step') {
 								sendWs(ws, {
 									type: 'TOOL_STEP_UPDATE',
-									tabId: effectiveTabId,
-									conversationId: effectiveTabId,
+									tabId,
 									step: event.data
 								}, `step="${event.data?.title || 'step'}"`);
 							} else if (event.type === 'usage') {
@@ -513,16 +536,14 @@ const server = Bun.serve<{ id: string }>({
 								const effectiveModel = event.data.model || model;
 								sendWs(ws, {
 									type: 'CHAT_USAGE',
-									tabId: effectiveTabId,
-									conversationId: effectiveTabId,
+									tabId,
 									totalTokens: event.data.totalTokens,
 									model: effectiveModel
 								}, `model="${effectiveModel}", totalTokens=${event.data.totalTokens}`);
 							} else if (event.type === 'error') {
 								sendWs(ws, {
 									type: 'CHAT_ERROR',
-									tabId: effectiveTabId,
-									conversationId: effectiveTabId,
+									tabId,
 									error: event.data.error
 								}, `error="${event.data.error}"`);
 							} else if (event.type === 'complete') {
@@ -530,8 +551,7 @@ const server = Bun.serve<{ id: string }>({
 								const count = event.data.totalTokens || totalTokensReported;
 								sendWs(ws, {
 									type: 'CHAT_COMPLETE',
-									tabId: effectiveTabId,
-									conversationId: effectiveTabId,
+									tabId,
 									messageId: event.data.messageId,
 									totalTokens: count,
 									model: effectiveModel
@@ -540,10 +560,9 @@ const server = Bun.serve<{ id: string }>({
 								// Broadcast to other windows that tab has updated messages
 								broadcastWs({
 									type: 'TAB_UPDATED',
-									tabId: effectiveTabId,
-									conversationId: effectiveTabId,
+									tabId,
 									lastMessageId: event.data.messageId
-								}, `tabId="${effectiveTabId}" updated`);
+								}, `tabId="${tabId}" updated`);
 							}
 						}
 						break;
@@ -603,9 +622,8 @@ const server = Bun.serve<{ id: string }>({
 						break;
 					}
 
-					case 'SETTINGS_SET':
-					case 'SETTING_SET': {
-						console.log(`[WebSocket] Incoming <- ${ws.data.id} [${payload.type}] key="${payload.key}", value="${payload.value}"`);
+					case 'SETTINGS_SET': {
+						console.log(`[WebSocket] Incoming <- ${ws.data.id} [SETTINGS_SET] key="${payload.key}", value="${payload.value}"`);
 						repos.setSetting(payload.key, String(payload.value));
 						sendWs(ws, {
 							type: 'SETTINGS_UPDATED',

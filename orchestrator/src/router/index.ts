@@ -11,9 +11,6 @@ export interface AttachmentItem {
 
 export interface ChatRequest {
 	tabId: string;
-	conversationId?: string;
-	chatId?: string;
-	sessionId?: string;
 	message: string;
 	attachments?: AttachmentItem[];
 	messages?: Array<{ role: string; content: string }>;
@@ -30,11 +27,10 @@ export interface StreamEvent {
 
 export class LlmRouter {
 	public async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent> {
-		const effectiveTabId = req.tabId || req.conversationId || req.chatId || req.sessionId || '';
-		const { message, attachments, provider = 'DeepSeek', model } = req;
+		const { tabId, message, attachments, provider = 'DeepSeek', model } = req;
 
 		// 1. Record user message in SQLite
-		repos.addMessage(effectiveTabId, 'user', message, attachments, model);
+		repos.addMessage(tabId, 'user', message, attachments, model);
 
 		// 2. Select modular provider adapter (e.g. DanyAPI)
 		const providerAdapter = getProvider(provider);
@@ -43,9 +39,9 @@ export class LlmRouter {
 
 		try {
 			for await (const chunk of providerAdapter.streamChat({
-				conversationId: effectiveTabId,
-				chatId: effectiveTabId,
-				sessionId: effectiveTabId,
+				conversationId: tabId,
+				chatId: tabId,
+				sessionId: tabId,
 				message,
 				messages: req.messages,
 				attachments,
@@ -55,10 +51,10 @@ export class LlmRouter {
 			})) {
 				if (chunk.type === 'token' && chunk.token) {
 					fullResponse += chunk.token;
-					yield { type: 'token', data: { token: chunk.token, tabId: effectiveTabId, conversationId: effectiveTabId } };
+					yield { type: 'token', data: { token: chunk.token, tabId } };
 				} else if (chunk.type === 'usage' && typeof chunk.totalTokens === 'number') {
 					totalTokens = chunk.totalTokens;
-					yield { type: 'usage', data: { totalTokens, tabId: effectiveTabId, conversationId: effectiveTabId, model: chunk.model || model } };
+					yield { type: 'usage', data: { totalTokens, tabId, model: chunk.model || model } };
 				} else if (chunk.type === 'tool_step') {
 					yield { type: 'tool_step', data: chunk.toolStep };
 				}
@@ -80,13 +76,13 @@ export class LlmRouter {
 			const errorChunk = fullResponse ? `\n\n> ${errorNotice}` : `> ${errorNotice}`;
 			fullResponse += errorChunk;
 
-			yield { type: 'token', data: { token: errorChunk, tabId: effectiveTabId, conversationId: effectiveTabId } };
-			yield { type: 'error', data: { error: cleanError, tabId: effectiveTabId, conversationId: effectiveTabId } };
+			yield { type: 'token', data: { token: errorChunk, tabId } };
+			yield { type: 'error', data: { error: cleanError, tabId } };
 		}
 
 		// 3. Save assistant message and update tab
 		const assistantMsg = repos.addMessage(
-			effectiveTabId,
+			tabId,
 			'assistant',
 			fullResponse,
 			undefined,
@@ -95,13 +91,12 @@ export class LlmRouter {
 		);
 
 		// Update tab's last response snippet
-		repos.updateTabLastResponse(effectiveTabId, fullResponse.slice(0, 200), model);
+		repos.updateTabLastResponse(tabId, fullResponse.slice(0, 200), model);
 
 		yield {
 			type: 'complete',
 			data: {
-				tabId: effectiveTabId,
-				conversationId: effectiveTabId,
+				tabId,
 				messageId: assistantMsg.id,
 				totalTokens,
 				model

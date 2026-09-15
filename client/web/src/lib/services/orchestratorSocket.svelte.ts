@@ -19,6 +19,7 @@ class OrchestratorSocketClient {
 	private started = false;
 	private pendingResolvers: Map<string | number, (res: any) => void> = new Map();
 	private rpcIdCounter = 1;
+	private lastSettingsRequestTime = 0;
 
 	constructor() {
 		if (typeof window !== 'undefined') {
@@ -69,13 +70,37 @@ class OrchestratorSocketClient {
 	}
 
 	/**
-	 * Handshake + state refresh, driven from JS on every (re)connection.
-	 * Sends are queued by the Rust transport while offline, so ordering is safe.
+	 * Handshake + state refresh, driven from JS on connection or SERVER_READY.
+	 * Coalesced across windows and triggers so exactly one LOAD_SETTINGS is sent.
 	 */
-	private onConnected() {
-		this.send({ type: 'CLIENT_INIT', clientVersion: '0.1.0' });
+	public requestSettings(force = false) {
+		// The overlay HUD does not need to initiate handshakes; main desktop window drives it.
+		if (typeof window !== 'undefined' && window.location.pathname.startsWith('/overlay') && !force) {
+			return;
+		}
+
+		const now = Date.now();
+		// Also coordinate across windows via localStorage timestamp
+		const lastAcrossWindows = typeof localStorage !== 'undefined'
+			? parseInt(localStorage.getItem('brainstorm_last_load_settings') || '0', 10)
+			: 0;
+
+		if (!force && (now - this.lastSettingsRequestTime < 2000 || now - lastAcrossWindows < 2000)) {
+			return;
+		}
+
+		this.lastSettingsRequestTime = now;
+		if (typeof localStorage !== 'undefined') {
+			try {
+				localStorage.setItem('brainstorm_last_load_settings', String(now));
+			} catch {}
+		}
+
 		this.send({ type: 'LOAD_SETTINGS', clientVersion: '0.1.0' });
-		this.send({ type: 'PLUGIN_LIST' });
+	}
+
+	private onConnected() {
+		this.requestSettings();
 	}
 
 	/** Ask the Rust supervisor to skip its backoff and reconnect immediately. */
@@ -117,7 +142,7 @@ class OrchestratorSocketClient {
 			switch (data.type) {
 				case 'SERVER_READY': {
 					// 1. Server announced readiness; client acknowledges by requesting environment settings
-					this.send({ type: 'LOAD_SETTINGS', clientVersion: '0.1.0' });
+					this.requestSettings();
 					break;
 				}
 
@@ -134,15 +159,13 @@ class OrchestratorSocketClient {
 					break;
 				}
 
-				case 'TAB_CREATED':
-				case 'CONVERSATION_CREATED': {
-					harness.handleTabCreated(data.tab || data.conversation);
+				case 'TAB_CREATED': {
+					harness.handleTabCreated(data.tab);
 					break;
 				}
 
-				case 'TAB_DETAIL':
-				case 'CONVERSATION_DETAIL': {
-					harness.handleTabDetail(data.tabId || data.conversationId, data.messages);
+				case 'TAB_DETAIL': {
+					harness.handleTabDetail(data.tabId, data.messages);
 					break;
 				}
 
@@ -151,9 +174,8 @@ class OrchestratorSocketClient {
 					break;
 				}
 
-				case 'TAB_DELETED':
-				case 'CONVERSATION_DELETED': {
-					harness.handleTabDeleted(data.tabId || data.conversationId);
+				case 'TAB_DELETED': {
+					harness.handleTabDeleted(data.tabId);
 					break;
 				}
 
@@ -161,15 +183,14 @@ class OrchestratorSocketClient {
 					// Refetch regardless of which tab is active: this keeps hidden
 					// windows populated (e.g. the fullscreen chat while in HUD mode,
 					// including responses for tabs that were never opened there).
-					const targetId = data.tabId || data.conversationId;
-					if (targetId) {
-						harness.fetchTabMessages(targetId, 7);
+					if (data.tabId) {
+						harness.fetchTabMessages(data.tabId, 7, true);
 					}
 					break;
 				}
 
 				case 'TAB_ARCHIVED': {
-					harness.handleTabArchived(data.tabId || data.conversationId, !!data.archived);
+					harness.handleTabArchived(data.tabId, !!data.archived);
 					break;
 				}
 
@@ -186,8 +207,7 @@ class OrchestratorSocketClient {
 				}
 
 				case 'CHAT_TOKEN': {
-					const targetId = data.tabId || data.conversationId;
-					const conv = harness.conversations.find((c) => c.id === targetId || c.chatId === targetId);
+					const conv = harness.conversations.find((c) => c.id === data.tabId || c.chatId === data.tabId);
 					if (conv && conv.messages.length > 0) {
 						const lastMsg = conv.messages[conv.messages.length - 1];
 						if (lastMsg.role === 'assistant') {
@@ -198,8 +218,7 @@ class OrchestratorSocketClient {
 				}
 
 				case 'TOOL_STEP_UPDATE': {
-					const targetId = data.tabId || data.conversationId;
-					const conv = harness.conversations.find((c) => c.id === targetId || c.chatId === targetId);
+					const conv = harness.conversations.find((c) => c.id === data.tabId || c.chatId === data.tabId);
 					if (conv && conv.messages.length > 0) {
 						const lastMsg = conv.messages[conv.messages.length - 1];
 						if (lastMsg.role === 'assistant') {
@@ -234,8 +253,7 @@ class OrchestratorSocketClient {
 
 				case 'CHAT_USAGE': {
 					if (typeof data.totalTokens === 'number') {
-						const targetId = data.tabId || data.conversationId;
-						const conv = harness.conversations.find((c) => c.id === targetId || c.chatId === targetId);
+						const conv = harness.conversations.find((c) => c.id === data.tabId || c.chatId === data.tabId);
 						if (conv && conv.messages.length > 0) {
 							const lastMsg = conv.messages[conv.messages.length - 1];
 							if (lastMsg.role === 'assistant') {
@@ -249,8 +267,7 @@ class OrchestratorSocketClient {
 
 				case 'CHAT_ERROR': {
 					harness.isGenerating = false;
-					const targetId = data.tabId || data.conversationId;
-					const conv = harness.conversations.find((c) => c.id === targetId || c.chatId === targetId);
+					const conv = harness.conversations.find((c) => c.id === data.tabId || c.chatId === data.tabId);
 					if (conv && conv.messages.length > 0) {
 						const lastMsg = conv.messages[conv.messages.length - 1];
 						if (lastMsg.role === 'assistant') {
@@ -265,8 +282,7 @@ class OrchestratorSocketClient {
 
 				case 'CHAT_COMPLETE': {
 					harness.isGenerating = false;
-					const targetId = data.tabId || data.conversationId;
-					const conv = harness.conversations.find((c) => c.id === targetId || c.chatId === targetId);
+					const conv = harness.conversations.find((c) => c.id === data.tabId || c.chatId === data.tabId);
 					if (conv && conv.messages.length > 0) {
 						const lastMsg = conv.messages[conv.messages.length - 1];
 						if (lastMsg.role === 'assistant') {

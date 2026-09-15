@@ -6,70 +6,77 @@ The system is designed with strict separation of concerns, zero host script poll
 
 ---
 
-## 1. High-Level Architecture
+### 1. High-Level Architecture
 
 ```
-+---------------------------------------------------------------------------------------+
-|                                     CLIENT LAYER                                      |
-|                                                                                       |
-|   +------------------------------------+          +-------------------------------+   |
-|   |         client/tauri (v2)          |          |          client/web           |   |
-|   |  Native desktop shell (macOS/Win)  |--------->|  SvelteKit 5 + Tailwind CSS   |   |
-|   |  Frameless overlay, native window  |          |  Reactive runes store, drag   |   |
-|   +------------------------------------+          +---------------+---------------+   |
-|                                                                   |                   |
-|   +------------------------------------+                          |                   |
-|   |            client/data             |                          |                   |
-|   |  User uploads, file attachments    |<-------------------------+                   |
-|   +------------------------------------+                          |                   |
-+-------------------------------------------------------------------|-------------------+
-                                                                    |
-                                                 WebSocket Protocol | (ws://127.0.0.1:4000/ws)
-                                                 HTTP File Upload   | (http://127.0.0.1:4000/api/upload)
-                                                                    v
-+---------------------------------------------------------------------------------------+
-|                                  ORCHESTRATOR LAYER                                   |
-|                                   (TypeScript / Bun)                                  |
-|                                                                                       |
-|   +-------------------------------------------------------------------------------+   |
-|   |                       HTTP Server & WebSocket Hub                             |   |
-|   |   - ws://127.0.0.1:4000/ws         : Real-time token streaming & tool updates |   |
-|   |   - POST /api/upload               : File staging & DanyAPI forwarder         |   |
-|   |   - POST /mcp                      : Model Context Protocol JSON-RPC 2.0      |   |
-|   |   - GET /health                    : Service supervisor status & telemetry    |   |
-|   +-------------------+---------------------------------------+-------------------+   |
-|                       |                                       |                       |
-|                       v                                       v                       |
-|   +---------------------------------------+   +-----------------------------------+   |
-|   |            SQLite Database            |   |            LLM Router             |   |
-|   |             (bun:sqlite)              |   |   - Session ID mapper (chatId)    |   |
-|   | - Conversations & message history     |   |   - Stream parser (SSE delta)     |   |
-|   | - Foreign key-safe dynamic chats      |   |   - Model normalizer (default)    |   |
-|   | - Tool execution steps & logs         |   +-----------------+-----------------+   |
-|   | - User settings & provider configs    |                     |                     |
-|   | - File uploads metadata & paths       |                     v                     |
-|   +---------------------------------------+   +-----------------------------------+   |
-|                                               |        Docker Supervisor          |   |
-|                                               |  docker compose up -d (DanyAPI)   |   |
-|                                               |  Live container log piping        |   |
-|                                               +-----------------+-----------------+   |
-+-----------------------------------------------------------------|---------------------+
-                                                                  |
-                                              OpenAI SSE Protocol | http://127.0.0.1:8000/v1
-                                              POST /v1/files      | (multipart staging)
-                                                                  v
-+---------------------------------------------------------------------------------------+
-|                                 CONTAINERIZED ENGINES                                 |
-|                                                                                       |
-|   +-------------------------------------------------------------------------------+   |
-|   |                 DanyAPI Container (ghcr.io/mindflowgo/danyapi)                |   |
-|   | - Port 8000: OpenAI-compatible API interface                                  |   |
-|   | - DeepSeek Web Engine: deepseek-v4-flash, deepseek-v4-pro, flash-thinking     |   |
-|   | - Qwen Multimodal: qwen3.7-plus, qwen3.8-max, vision models                   |   |
-|   | - Native Session Store: maps session_id to maintain multi-turn memory         |   |
-|   | - File Staging Store: consumes uploaded files for visual & context inference  |   |
-|   +-------------------------------------------------------------------------------+   |
-+---------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------------+
+|                                           CLIENT LAYER                                            |
+|                                                                                                   |
+|   +--------------------------------------------------+          +-----------------------------+   |
+|   |                client/tauri (v2)                 |          |         client/web          |   |
+|   |  Native desktop shell (macOS/Win)                |          | SvelteKit 5 + Tailwind CSS  |   |
+|   |  - Dual-window (Main chat + Ambient overlay)     |          | - Reactive runes store      |   |
+|   |  - Native WS Transport (orchestrator_ws.rs)      |<---------| - IPC bridge: ws_send,      |   |
+|   |    • Single persistent connection to :4000/ws    | events:  |   orchestrator-message,     |   |
+|   |    • Capped backoff & offline queue (64 msgs)    | status,  |   orchestrator-status       |   |
+|   |  - Process Supervisor (orchestrator_loader.rs)   | message  | - Window drag & HUD controls|   |
+|   |    • Spawns & lifecycle-manages Bun orchestrator |--------->|                             |   |
+|   |    • Graceful SIGTERM with timeout before kill   |          +--------------+--------------+   |
+|   +-------------------------+------------------------+                         |                  |
+|                             |                                                  |                  |
+|                             | Persistent WebSocket (Native)                    | Multipart Staging|
+|                             | ws://127.0.0.1:4000/ws                           | /api/upload      |
+|                             v                                                  v                  |
++--------------------------------------------------------------------------------+------------------+
+                              |                                                  |
+                              +─────────────────────────┬────────────────────────┘
+                                                        v
++---------------------------------------------------------------------------------------------------+
+|                                        ORCHESTRATOR LAYER                                         |
+|                                         (TypeScript / Bun)                                        |
+|                                                                                                   |
+|   +-------------------------------------------------------------------------------------------+   |
+|   |                               HTTP Server & WebSocket Hub                                 |   |
+|   |   - ws://127.0.0.1:4000/ws         : Real-time token streaming, tabs, & tool steps        |   |
+|   |   - POST /api/upload               : File staging & DanyAPI forwarder                     |   |
+|   |   - POST /mcp                      : Model Context Protocol JSON-RPC 2.0 (Confined Root)  |   |
+|   |   - GET /api/tabs, /api/settings   : Canonical REST state endpoints                       |   |
+|   |   - GET /health                    : Supervisor telemetry & Docker engine metrics         |   |
+|   |   - Origin Validation              : Strict localhost & tauri:// filtering (blocks CSRF) |   |
+|   +-------------------+-----------------------------+-----------------------------+-----------+   |
+|                       |                             |                             |               |
+|                       v                             v                             v               |
+|   +-----------------------------------+ +-----------------------+ +---------------------------+   |
+|   |          SQLite Database          | |      LLM Router       | |       Plugin System       |   |
+|   |           (bun:sqlite)            | | - Tab session binding | | (plugins/ & McpStdioClient|   |
+|   | - Projects, tabs (Base58 IDs)     | | - Provider adapters   | | - Dynamic MCP tool pass-  |   |
+|   | - Messages, tool steps, uploads   | | - Error delta yielding| |   through & git installs  |   |
+|   | - Settings & Plugins registry     | | - Token accounting    | | - pluginBus cross-events  |   |
+|   +-----------------------------------+ +-----------+-----------+ +---------------------------+   |
+|                                                     |                                             |
+|                                                     v                                             |
+|                                         +-----------------------+                                 |
+|                                         |   Docker Supervisor   |                                 |
+|                                         | docker compose up -d  |                                 |
+|                                         | DanyAPI container tail|                                 |
+|                                         +-----------+-----------+                                 |
++-----------------------------------------------------|---------------------------------------------+
+                                                      |
+                                  OpenAI SSE Protocol | http://127.0.0.1:8000/v1
+                                  POST /v1/files      | (multipart staging)
+                                                      v
++---------------------------------------------------------------------------------------------------+
+|                                       CONTAINERIZED ENGINES                                       |
+|                                                                                                   |
+|   +-------------------------------------------------------------------------------------------+   |
+|   |                       DanyAPI Container (ghcr.io/mindflowgo/danyapi)                      |   |
+|   | - Port 8000: OpenAI-compatible API interface                                              |   |
+|   | - DeepSeek Web Engine: deepseek-v4-flash, deepseek-v4-pro, flash-thinking                 |   |
+|   | - Qwen Multimodal: qwen3.7-plus, qwen3.8-max, vision models                               |   |
+|   | - Native Session Store: maps tab_id (session_id) to maintain multi-turn memory            |   |
+|   | - File Staging Store: consumes uploaded files for visual & context inference              |   |
+|   +-------------------------------------------------------------------------------------------+   |
++---------------------------------------------------------------------------------------------------+
 ```
 
 ---
@@ -88,20 +95,23 @@ brAInstorm/
 │   │   ├── src/
 │   │   │   ├── lib/
 │   │   │   │   ├── components/  # Sidebar, TabsHeader, PromptInput, ConversationView, NewChatModal
-│   │   │   │   ├── stores/      # Reactive harness store (Svelte 5 runes)
-│   │   │   │   ├── services/    # WebSocket client with auto-reconnect
+│   │   │   │   ├── stores/      # Reactive harness store (Svelte 5 runes: harness.svelte.ts)
+│   │   │   │   ├── services/    # Tauri IPC-driven socket client (orchestratorSocket.svelte.ts)
 │   │   │   │   └── utils/       # Window drag utilities for macOS frameless overlay
-│   │   │   └── routes/          # SvelteKit routes & root frame
+│   │   │   └── routes/          # SvelteKit routes: (desktop)/ (main window) & overlay/ (ambient HUD)
 │   │   ├── package.json
 │   │   └── svelte.config.js
 │   │
 │   ├── tauri/                   # Tauri v2 native desktop shell
 │   │   ├── src-tauri/
-│   │   │   ├── Cargo.toml       # Tauri v2 dependencies
+│   │   │   ├── Cargo.toml       # Tauri v2 dependencies + tokio-tungstenite + libc
 │   │   │   ├── tauri.conf.json  # Dev URL (web:5173), frontendDist (../../web/build)
-│   │   │   ├── capabilities/    # Tauri security capabilities (window drag, etc.)
+│   │   │   ├── capabilities/    # Tauri security capabilities (window drag, events, etc.)
 │   │   │   ├── icons/           # Generated cross-platform desktop icons
-│   │   │   └── src/             # Rust main, lib, build.rs
+│   │   │   └── src/
+│   │   │       ├── main.rs      # Desktop entrypoint & AppKit Spaces configuration
+│   │   │       ├── orchestrator_ws.rs     # Native WebSocket transport, offline queue, auto-reconnect
+│   │   │       └── orchestrator_loader.rs # Orchestrator process lifecycle supervisor
 │   │   └── package.json
 │   │
 │   └── data/                    # Client uploads and cache
@@ -117,13 +127,14 @@ brAInstorm/
 │
 ├── orchestrator/                # Central Bun / TypeScript backend
 │   ├── src/
-│   │   ├── index.ts             # Bun.serve({ websocket: ... }) server entrypoint
+│   │   ├── index.ts             # Bun.serve({ websocket: ... }) server entrypoint with origin security
 │   │   ├── bootstrap/           # Environment checks and database setup
 │   │   ├── db/
-│   │   │   ├── schema.sql       # SQLite schema (projects, tabs, messages)
+│   │   │   ├── schema.sql       # SQLite schema (projects, tabs, messages, plugins, counters)
 │   │   │   ├── helper.ts        # Base58 encoding & compact ID generators
 │   │   │   └── index.ts         # bun:sqlite database client & repositories
-│   │   ├── mcp/                 # Lightweight Model Context Protocol (MCP) server
+│   │   ├── mcp/                 # Lightweight Model Context Protocol (MCP) server with path traversal sandbox
+│   │   ├── plugins/             # Plugin Manager, McpStdioClient, and plugin event bus
 │   │   ├── processes/           # Docker Compose supervisor & live log streamer
 │   │   ├── providers/           # Modular API adapters (DanyAPI, DeepSeek, LocalMock)
 │   │   └── router/              # LLM provider routing & dispatcher
@@ -132,6 +143,7 @@ brAInstorm/
 │   └── package.json
 │
 ├── docs/                        # Project documentation & guides
+├── UI-PROTOCOL.md               # WebSocket and HTTP interface protocol specification
 └── ARCHITECTURE.md              # System specification (this document)
 ```
 
@@ -140,35 +152,47 @@ brAInstorm/
 ## 3. Core Component Architecture
 
 ### 3.1 `client/web` (SvelteKit 5 Frontend)
-- **Role**: High-speed, responsive, frameless chat interface.
+- **Role**: High-speed, responsive, frameless chat interface with dual desktop and ambient overlay modes.
 - **Tech Stack**: SvelteKit 5 (Runes `$state`, `$derived`, `$effect`), Tailwind CSS, `marked` (GitHub Flavored Markdown), Lucide icons.
 - **Key Architectural Patterns**:
-  - **Single Store Truth (`harness.svelte.ts`)**: Centralizes conversation lists, active tab selection, settings, streaming state, and model choices using Svelte 5 runes.
-  - **Resilient WebSocket Service (`orchestratorSocket.svelte.ts`)**: Automatically maintains connection with a 3-second retry loop and provides a manual `manualReconnect()` hook linked to the header status badge.
+  - **Single Store Truth (`harness.svelte.ts`)**: Centralizes tab collections, active tab selection, user settings, streaming states, and model selections using Svelte 5 runes.
+  - **Tauri IPC Orchestrator Client (`orchestratorSocket.svelte.ts`)**: The JavaScript client does not maintain a raw browser WebSocket. Instead, it interfaces directly with the native Tauri socket transport:
+    - Listens to incoming server frames via `orchestrator-message` Tauri event.
+    - Tracks connection lifecycle changes via `orchestrator-status` (`connected`, `connecting`, `disconnected`).
+    - Dispatches outbound payloads via `ws_send` Tauri invoke, safely queued natively if offline.
+    - Synchronizes environment on initial connection or reconnect via `LOAD_SETTINGS`.
   - **Window Dragging (`drag.ts`)**: Binds primary mouse drag gestures to `window.__TAURI__.window.getCurrentWindow().startDragging()`, guarding interactive controls (`button`, `input`, `textarea`, `[role="tab"]`) to eliminate WebKit drag gesture locking.
 
 ### 3.2 `client/tauri` (Tauri v2 Desktop Shell)
-- **Role**: Native macOS/Windows frameless application wrapper.
-- **Tech Stack**: Tauri v2, Rust 2021 edition.
-- **Configuration**:
-  - `titleBarStyle: "Overlay"` with hidden window title to create an edge-to-edge seamless window frame.
-  - `capabilities/default.json` explicitly declaring `core:window:allow-start-dragging`, `core:window:default`, and `core:default`.
-  - Configured with official curved squircle app icons from `/assets/`.
+- **Role**: Native macOS/Windows frameless application wrapper, multi-window coordinator, and process/transport supervisor.
+- **Tech Stack**: Tauri v2, Rust 2021 edition, Tokio async runtime, `tokio-tungstenite`.
+- **Subsystems**:
+  - **Native WebSocket Transport (`orchestrator_ws.rs`)**:
+    - Maintains a single persistent connection to `ws://127.0.0.1:4000/ws` across all app windows (main and overlay).
+    - Capped exponential backoff reconnection (`1s` to `15s`), resettable immediately via `ws_reconnect` command.
+    - Ring buffer offline queue holding up to 64 outgoing messages, automatically flushed in order upon reconnect.
+    - Dispatches parsed messages to all open windows via `orchestrator-message` event broadcast.
+  - **Orchestrator Lifecycle Supervisor (`orchestrator_loader.rs`)**:
+    - Automatically checks if port 4000 is open; if not, spawns the orchestrator process (`bun src/index.ts` in dev, or bundled sidecar executable in production).
+    - Tracks child PID in an `OrchestratorProcess` mutex.
+    - Implements graceful shutdown on Unix via `SIGTERM` with a 500ms timeout before falling back to `kill()`, ensuring zero zombie node/bun processes on app exit.
+  - **Window Capabilities & Styling**:
+    - `titleBarStyle: "Overlay"` with hidden window title for edge-to-edge seamless window frame.
+    - Native macOS `NSFloatingWindowLevel` and AppKit Spaces collection behaviors configured via `objc2`.
 
 ### 3.3 `orchestrator` (Bun / TypeScript Engine)
-- **Role**: Central coordinator managing SQLite persistence, LLM stream routing, Docker supervision, and MCP tools.
+- **Role**: Central coordinator managing SQLite persistence, LLM stream routing, Docker supervision, MCP tools, and plugins.
 - **Tech Stack**: Bun runtime, native `Bun.serve()`, native `bun:sqlite`.
 - **Core Subsystems**:
-  - **Service Supervisor (`supervisor.ts`)**: Launches `docker compose up -d` in `api_sandbox/DanyAPI`, monitors health on `http://127.0.0.1:8000/v1/models`, and spawns a background log tailer (`docker compose logs -f --tail 20`) piping stdout/stderr into the Tauri console output with `[DanyAPI]` prefix.
-  - **Modular API Providers (`providers/`)**: Contained modules for each engine:
-    - `danyapi.ts` (`DanyApiProvider`): Manages DanyAPI / DeepSeek on port 8000, `session_id` multi-turn mapping, multimodal vision promotion, file staging, and SSE extraction of `totalTokens` (`total_tokens`).
+  - **HTTP Server & Origin Security (`index.ts`)**: Origin validation helper (`isAllowedOrigin`) rejecting non-local origins with `403 Forbidden` to prevent browser-based CSRF/RCE. Employs dynamic CORS headers rather than wildcard `*`.
+  - **Plugin Subsystem (`plugins/`)**: Comprehensive plugin engine supporting MCP stdio processes, Bun background plugins, and Docker-managed services. Tools are dynamically registered and namespaced.
+  - **Service Supervisor (`supervisor.ts`)**: Launches `docker compose up -d` in `api_sandbox/DanyAPI`, monitors health on `http://127.0.0.1:8000/v1/models`, and streams live container logs with `[DanyAPI]` prefix.
+  - **Modular API Providers (`providers/`)**:
+    - `danyapi.ts` (`DanyApiProvider`): Manages DanyAPI / DeepSeek on port 8000, multi-turn `session_id = tab_id` mapping, multimodal vision promotion, and token usage accounting.
     - `mock.ts` (`LocalMockProvider`): Graceful offline fallback.
-  - **LlmRouter (`router/index.ts`)**: Central dispatcher that delegates to the appropriate provider adapter, handles stream events (`token`, `usage`, `tool_step`), and tracks persistence.
-  - **Database Repositories (`db/index.ts`)**: WAL-mode SQLite operations with automatic session record provisioning (`ensureConversation`) and `attachments` / `usage` JSON persistence.
-  - **HTTP Endpoints**:
-    - `POST /api/upload`: Handles single/multiple multipart file uploads, persists them to `api_sandbox/data`, and forwards them to DanyAPI for multimodal staging.
-    - `POST /mcp`: JSON-RPC 2.0 tool execution interface.
-    - `GET /health`: Supervisor health telemetry.
+  - **LlmRouter (`router/index.ts`)**: Central dispatcher mapping `tabId` to inference streaming. Formats clean error messages and prevents token duplication on upstream failure.
+  - **Database Repositories (`db/index.ts`)**: WAL-mode SQLite operations managing projects, tabs, messages, tool steps, settings, uploads, and plugins.
+  - **MCP Server (`mcp/index.ts`)**: Sandboxed Model Context Protocol tool execution engine (`run_command`, `read_file`, `write_file`) strictly confined to workspace `rootDir`.
 
 ---
 
@@ -376,6 +400,7 @@ CREATE TABLE IF NOT EXISTS tabs (
     name TEXT NOT NULL,            -- user-editable tab name
     last_response TEXT,            -- snippet of last LLM response
     last_model TEXT,               -- model used in last exchange
+    archived INTEGER NOT NULL DEFAULT 0, -- 1 if archived, 0 if active
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -410,7 +435,7 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at INTEGER NOT NULL
 );
 
--- File Uploads Metadata
+-- Client Uploads Metadata
 CREATE TABLE IF NOT EXISTS uploads (
     id TEXT PRIMARY KEY,
     filename TEXT NOT NULL,
@@ -427,6 +452,19 @@ CREATE TABLE IF NOT EXISTS service_state (
     status TEXT NOT NULL,
     last_ping INTEGER NOT NULL,
     error TEXT
+);
+
+-- Plugins (dynamic extensions, MCP servers & process plugins)
+CREATE TABLE IF NOT EXISTS plugins (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,            -- 'mcp' | 'bun' | 'docker'
+    enabled INTEGER NOT NULL DEFAULT 1,
+    manifest TEXT NOT NULL,        -- full manifest JSON
+    status TEXT NOT NULL DEFAULT 'stopped',
+    last_error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 ```
 
@@ -453,49 +491,159 @@ function nextSeq(name: string): number {
 
 ---
 
-## 8. WebSocket & HTTP Protocol Specification
+## 8. Plugin Subsystem Architecture (`orchestrator/src/plugins/`)
 
-### 8.1 WebSocket: `ws://127.0.0.1:4000/ws`
+The plugin subsystem provides an extensible architecture for adding MCP tooling, local service processes, and external engine connectors without modifying core orchestrator code.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ PLUGIN MANAGER (`PluginManager`)                                       │
+│                                                                        │
+│   ┌───────────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
+│   │ Stdio MCP Subprocess  │  │   Bun Process    │  │ Docker Compose │  │
+│   │ type: 'mcp'           │  │   type: 'bun'    │  │ type: 'docker' │  │
+│   │ (McpStdioClient)      │  │ (child_process)  │  │  (supervisor)  │  │
+│   └───────────┬───────────┘  └────────┬─────────┘  └────────┬───────┘  │
+│               │                       │                     │          │
+│               ▼                       ▼                     ▼          │
+│   ┌────────────────────────────────────────────────────────────────┐   │
+│   │ Tool Registry & Namespacing: `plugin_<id>_<toolName>`          │   │
+│   │ Aggregated into orchestrator's central MCP interface           │   │
+│   └────────────────────────────────┬───────────────────────────────┘   │
+│                                    │                                   │
+│                                    ▼                                   │
+│   ┌────────────────────────────────────────────────────────────────┐   │
+│   │ Cross-Process Plugin Event Bus (`pluginBus`)                   │   │
+│   │ Emits `tab-updated` to notify open windows of MCP-driven chats │   │
+│   └────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.1 Manifest Structure (`PluginManifest`)
+Each plugin defines a `plugin.json` manifest:
+```typescript
+export interface PluginManifest {
+    id: string;               // Unique plugin identifier
+    name: string;             // Human-readable display label
+    version?: string;         // Semantic version string
+    type: 'mcp' | 'bun' | 'docker';
+    command?: string;         // Subprocess command for 'mcp' (stdio JSON-RPC)
+    args?: string[];          // Arguments passed to subprocess
+    env?: Record<string, string>;
+    entrypoint?: string;      // Entrypoint script for 'bun' plugins
+    port?: number;            // Healthcheck port for background services
+    serviceName?: string;     // Service identifier for 'docker' plugins
+    mcp?: {
+        tools: Array<{ name: string; description: string; inputSchema: Record<string, any> }>;
+        scaffold?: string;    // Custom JS file exporting tool call handlers
+    };
+    models?: Array<{ id: string; name?: string }>;
+}
+```
+
+### 8.2 Subsystem Components
+1. **`McpStdioClient`**: Manages stdio newline-delimited JSON-RPC communication with subprocess MCP servers. Automatically initiates protocol handshakes, enumerates available tools via `tools/list`, and routes invocations through `tools/call`. Handles subprocess exits and cancellations safely by clearing timers and rejecting pending requests.
+2. **`PluginManager`**:
+   - Manages plugin lifecycle (`restore`, `register`, `toggle`, `remove`, `installFromGit`).
+   - Dynamically exposes enabled plugin tools into the orchestrator MCP tool registry with prefix `plugin_<id>_<toolName>`.
+   - Persists manifest states and enabled toggles to SQLite `plugins` table.
+3. **`pluginBus` Event Bus**: An in-process event hub enabling decoupled plugins to trigger orchestrator broadcasts (e.g. `pluginBus.emit('tab-updated', { tabId })` when external MCP threads create or mutate conversations).
+
+---
+
+## 9. WebSocket & HTTP Protocol Specification
+
+### 9.1 WebSocket: `ws://127.0.0.1:4000/ws`
+
+The native transport is managed in Rust (`client/tauri/src-tauri/src/orchestrator_ws.rs`). Web clients dispatch and listen through Tauri IPC.
 
 #### Client -> Orchestrator Messages
 
 | Type | Payload | Description |
 |---|---|---|
-| `CLIENT_INIT` | `{ clientVersion: string }` | Handshake; requests current settings, projects, and tabs |
-| `TAB_CREATE` | `{ projectId: string, name?: string }` | Create a new tab (chat thread) under a project |
-| `TAB_FETCH` | `{ tabId: string }` | Retrieve messages and tool steps for a tab |
-| `TAB_RENAME` | `{ tabId: string, name: string }` | Rename a tab (user-editable) |
-| `PROMPT_SEND` | `{ tabId: string, content: string, provider?: string, model?: string }` | Send user prompt; `tabId` is used as LLM `session_id` |
-| `PROMPT_ABORT` | `{ tabId: string }` | Abort current generation |
-| `SETTINGS_SET` | `{ key: string, value: any }` | Update user settings or provider config |
+| `LOAD_SETTINGS` | `{ clientVersion?: string }` | Handshake acknowledgment; requests current settings, projects, tabs, models, and plugins |
+| `TAB_CREATE` | `{ projectId?: string, name?: string }` | Create a new tab (chat thread) with sequential Base58 ID |
+| `TAB_FETCH` | `{ tabId: string, days?: number }` | Retrieve message history and tool execution steps for a tab |
+| `TAB_RENAME` | `{ tabId: string, name: string }` | Rename a tab (updates title in SQLite and broadcasts to all clients) |
+| `TAB_DELETE` | `{ tabId: string }` | Delete tab, cascade remove messages, and best-effort cleanup upstream provider session |
+| `TAB_ARCHIVE` | `{ tabId: string, archived?: boolean }` | Toggle archive state of a tab |
+| `PROMPT_SEND` | `{ tabId: string, content: string, attachments?: [], provider?: string, model?: string }` | Send user message; `tabId` serves as upstream `session_id` |
+| `SETTINGS_SET` | `{ key: string, value: any }` | Update configuration parameter in SQLite `settings` table |
+| `PLUGIN_LIST` | `{}` | Query currently installed plugins and status |
+| `PLUGIN_INSTALL`| `{ url?: string, manifest?: object }` | Install plugin from Git repository or raw manifest |
+| `PLUGIN_REMOVE` | `{ id: string }` | Uninstall plugin and remove from filesystem and registry |
+| `PLUGIN_TOGGLE` | `{ id: string, enabled: boolean }` | Enable or disable a plugin at runtime |
 | `MCP_REQUEST` | `{ rpc: { jsonrpc: '2.0', id, method, params } }` | Execute Model Context Protocol tool |
 
 #### Orchestrator -> Client Messages
 
 | Type | Payload | Description |
 |---|---|---|
-| `SERVER_READY` | `{ projects: [], tabs: [], settings: {}, services: [] }` | Initial state handshake response |
-| `TAB_CREATED` | `{ tab: Tab }` | Confirms new tab created with server-assigned Base58 ID |
+| `SERVER_READY` | `{ serverVersion: string, status: 'ready' }` | Initial socket connection acknowledgement |
+| `SETTINGS_LOADED` | `{ projects, tabs, settings, services, models, plugins }` | Complete environment state payload in response to `LOAD_SETTINGS` |
+| `TAB_CREATED` | `{ tab: Tab }` | Confirms tab creation with server-assigned Base58 ID |
+| `TAB_DETAIL` | `{ tabId: string, messages: Message[] }` | Full message history and tool steps for requested tab |
+| `TAB_RENAMED` | `{ tabId: string, name: string }` | Broadcast notification when a tab is renamed |
+| `TAB_DELETED` | `{ tabId: string }` | Broadcast notification when a tab is deleted |
+| `TAB_ARCHIVED` | `{ tabId: string, archived: boolean }` | Broadcast notification when tab archive status changes |
+| `TAB_UPDATED` | `{ tabId: string, lastMessageId?: string }` | Broadcast notification when messages in a tab have updated |
 | `CHAT_TOKEN` | `{ tabId: string, token: string }` | Incremental streamed LLM response token |
-| `CHAT_USAGE` | `{ tabId: string, totalTokens: number }` | Token usage from LLM provider |
-| `TOOL_STEP_UPDATE` | `{ tabId: string, step: ToolStep }` | Real-time tool execution status and diff payload |
-| `CHAT_COMPLETE` | `{ tabId: string, messageId: string, totalTokens?: number }` | Stream completion signal |
-| `MCP_RESPONSE` | `{ rpc: { jsonrpc: '2.0', id, result, error } }` | MCP execution result |
-| `ERROR` | `{ code: string, message: string }` | Error notifications |
+| `CHAT_USAGE` | `{ tabId: string, totalTokens: number, model?: string }` | Token usage from upstream provider |
+| `TOOL_STEP_UPDATE`| `{ tabId: string, step: ToolStep }` | Real-time tool execution status, badge count, and details |
+| `CHAT_ERROR` | `{ tabId: string, error: string }` | Formatted LLM provider error message |
+| `CHAT_COMPLETE` | `{ tabId: string, messageId: string, totalTokens?: number, model?: string }` | Stream completion signal |
+| `PLUGINS_UPDATED` | `{ plugins: PluginInfo[] }` | Broadcast of updated plugin list and states |
+| `PLUGIN_ERROR` | `{ error: string, source: string }` | Plugin operation failure alert |
+| `SETTINGS_UPDATED`| `{ settings: Record<string, string> }` | Broadcast of updated key-value settings |
+| `MCP_RESPONSE` | `{ rpc: { jsonrpc: '2.0', id, result, error } }` | MCP JSON-RPC execution result |
+| `ERROR` | `{ message: string }` | Unhandled error response |
 
-### 8.2 HTTP REST Endpoints
+### 9.2 HTTP REST Endpoints
+
+All endpoints validate the `Origin` header against local authorized origins (`tauri://localhost`, `127.0.0.1`, `localhost`), rejecting untrusted origins with `403 Forbidden`.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/upload` | Multipart file upload (`file`, `session_id`, `model`). Saves to `api_sandbox/data` and forwards to DanyAPI `/v1/files`. |
-| `POST` | `/mcp` | JSON-RPC 2.0 Model Context Protocol tool execution endpoint. |
+| `POST` | `/mcp` | JSON-RPC 2.0 Model Context Protocol endpoint (confined to workspace root; notifications return `204 No Content`). |
+| `POST` | `/api/upload` | Multipart file upload (`file`, `session_id`, `model`). Saves to disk and forwards to DanyAPI `/v1/files`. |
+| `GET` | `/api/tabs` | Retrieves array of all active and archived tabs. |
+| `GET` | `/api/tabs/:id/messages?days=7` | Direct query of tab message history and nested tool steps. |
+| `DELETE` | `/api/tabs/:id` | Deletes tab and triggers best-effort upstream session teardown. |
+| `GET` | `/api/projects` | Retrieves array of all registered projects. |
+| `GET` | `/api/settings` | Retrieves key-value map of all saved settings. |
+| `GET` | `/api/settings/load` | Returns complete initial bootstrap payload (projects, tabs, settings, services, models). |
 | `GET` | `/health` | Returns supervisor telemetry, active Docker container status, and database metrics. |
-| `GET` | `/api/conversations` | Retrieves list of all persisted conversations. |
-| `GET` | `/api/settings` | Retrieves current user and model configuration settings. |
+| `GET` | `/api/log?err=...&msg=...` | Client diagnostics logging endpoint. |
 
 ---
 
-## 9. Process Supervision & Container Ports
+## 10. Security Architecture & Sandboxing
+
+brAInstorm enforces defense-in-depth isolation across browser vectors, process execution, and the filesystem:
+
+### 10.1 Origin Validation & Dynamic CORS
+- **Threat Vector**: Malicious web pages visited in regular browsers could perform CSRF or DNS rebinding against `http://127.0.0.1:4000/mcp` to execute arbitrary commands.
+- **Protection**:
+  - `isAllowedOrigin(origin)` validates every incoming HTTP request and WebSocket upgrade.
+  - Allowed origins: `tauri://localhost`, `app://localhost`, `tauri.localhost`, `localhost`, `127.0.0.1`, and direct non-browser tools (no `Origin` header).
+  - Any request with a foreign browser origin is immediately rejected with `403 Forbidden: Untrusted Origin`.
+  - Replaced wildcard `Access-Control-Allow-Origin: *` with dynamic origin reflection restricted to validated origins.
+
+### 10.2 MCP Tool Filesystem Containment
+- **Threat Vector**: Relative path parameters (`../../etc/passwd`) escaping into host filesystem.
+- **Protection**:
+  - Workspace root is anchored to `process.env.BRAINSTORM_PROJECT_ROOT || process.cwd()`.
+  - In `read_file` and `write_file`, all paths are normalized via `resolve(this.rootDir, path)` and checked with `.startsWith(this.rootDir)`. Unsafe paths return permission errors.
+  - In `run_command`, execution directory `cwd` is validated to ensure it cannot escape outside `this.rootDir`.
+  - Process stdout and stderr are captured with a 10MB `maxBuffer` to prevent truncated diagnostics.
+
+### 10.3 Safe Process Teardown
+- Orchestrator child processes and MCP stdio clients are terminated using standard Unix `SIGTERM` with timeout before escalating to `SIGKILL`, allowing WAL checkpoints, socket cleanups, and file flush operations to complete cleanly.
+- `McpStdioClient` clears pending timers and rejects outstanding promises upon shutdown, preventing promise leaks.
+
+---
+
+## 11. Process Supervision & Container Ports
 
 | Service | Mode | Port | Config / Directory | Description |
 |---|---|---|---|---|
@@ -506,17 +654,18 @@ function nextSeq(name: string): number {
 
 ---
 
-## 10. Verification & Quality Assurance
+## 12. Verification & Quality Assurance
 
-1. **Frontend Production Build**: `bun run build` in `client/web` outputs static assets to `client/web/build` with 0 errors and 0 warnings.
-2. **Desktop Binary Compilation**: `cargo build --release` in `client/tauri/src-tauri` compiles the release executable `tauriclient` in ~1 second.
-3. **End-to-End WebSocket Stream**: Verified prompts stream tokens from Docker port 8000 through port 4000 WebSocket to the Svelte UI in real time.
-4. **Session Continuity**: Multi-turn prompts reuse `session_id = chat-{timestamp}` to maintain context without data loss.
-5. **File Staging**: Verified file uploads via `POST /api/upload` persist to `api_sandbox/data` and stage in DanyAPI for multimodal question-answering.
+1. **Frontend Production Build**: `bun run build` / `vite build` in `client/web` outputs static assets to `client/web/build` with 0 errors.
+2. **Desktop Binary Compilation**: `cargo check` / `cargo build` in `client/tauri/src-tauri` compiles cleanly with 0 errors.
+3. **TypeScript Build Check**: `bun build --target=bun src/index.ts --no-bundle` in `orchestrator` compiles cleanly with 0 errors.
+4. **End-to-End WebSocket Stream**: Verified prompts stream tokens from Docker port 8000 through native Tauri socket transport to the Svelte UI in real time.
+5. **Session Continuity**: Multi-turn prompts reuse `session_id = tab_id` to maintain context without data loss.
+6. **File Staging**: Verified file uploads via `POST /api/upload` persist to `api_sandbox/data` and stage in DanyAPI for multimodal question-answering.
 
 ---
 
-## 11. Window Management, Multi-Monitor Safety & macOS Spaces Architecture
+## 13. Window Management, Multi-Monitor Safety & macOS Spaces Architecture
 
 brAInstorm utilizes a dual-window model in Tauri v2 coordinated with native macOS AppKit APIs for robust floating HUD operation:
 
@@ -554,25 +703,25 @@ brAInstorm utilizes a dual-window model in Tauri v2 coordinated with native macO
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 11.1 Multi-Monitor Clamping & Off-Screen Protection
+### 13.1 Multi-Monitor Clamping & Off-Screen Protection
 * When switching modes (`enter_overlay_mode`, `exit_overlay_mode`) or on app launch, target coordinates `(x, y)` from `~/.brainstorm.json` are validated against `app.available_monitors()`.
 * If a target position lands outside all active display viewports (e.g. secondary monitor was unplugged or arrangement changed), the window is clamped safely to the primary monitor (`x: mon_x + 24.0, y: mon_y + 100.0` for overlay).
 
-### 11.2 macOS Spaces & Fullscreen Integration
+### 13.2 macOS Spaces & Fullscreen Integration
 * Regular always-on-top windows in macOS bind strictly to the virtual desktop (Space) where they were opened.
 * On macOS, brAInstorm configures the underlying `NSWindow` via `objc2`:
   $$\text{CollectionBehavior} = \text{CanJoinAllSpaces } (1 \ll 0) \mid \text{FullScreenAuxiliary } (1 \ll 8) \mid \text{IgnoresCycle } (1 \ll 6)$$
 * This allows the floating brain HUD to remain visible across all virtual spaces, Mission Control, and fullscreen IDEs/browsers without vanishing.
 
-### 11.3 Window Move Tracking & Persistence
+### 13.3 Window Move Tracking & Persistence
 * Native `WindowEvent::Moved` events captured in Tauri's event loop automatically update `state.minimalist.x/y` or `state.normal.x/y` and persist them to `~/.brainstorm.json`.
 * Both frontend layouts (`(desktop)/+layout.svelte` and `overlay/+page.svelte`) call `initWindowListeners()` to register window resize and move synchronization.
 
-### 11.4 Application Lifecycle & Dock Reopen
+### 13.4 Application Lifecycle & Dock Reopen
 * **Clean Termination**: The overlay's Quit command invokes native `exit_app` (`app.exit(0)`), ensuring the main window, overlay, and background supervisor processes terminate simultaneously with zero orphan/zombie processes.
 * **Dock Reopen Handler**: Listens for `tauri::RunEvent::Reopen`. If clicked in the macOS Dock while in minimalist mode or with no visible windows, it automatically unhides and focuses the main window.
 
-### 11.5 Cross-Window Event Bridge & Multi-Layer Thread Synchronization
+### 13.5 Cross-Window Event Bridge & Multi-Layer Thread Synchronization
 * **Cross-Window Handover**: When transitioning from the ambient overlay to the full desktop chat ("Open Chat" or "Restore Full Window"):
   * `exit_overlay_mode(tab_id)` passes `tabId` directly into Rust.
   * Rust native code shows and focuses the main window, then emits `main_win.emit("refresh-active-thread", { tabId })` directly from native code (bypassing webview permissions).
@@ -593,8 +742,10 @@ brAInstorm utilizes a dual-window model in Tauri v2 coordinated with native macO
   * `handleTabDetail` dynamically adds missing tabs, updates message arrays, and forces re-evaluation of Svelte 5 `$derived` state via `this.conversations = [...this.conversations]`.
   * `ConversationView` monitors both active conversation ID and message counts, automatically scrolling the conversation container to the bottom so that newly generated overlay messages are immediately in view.
 
-### 11.6 Single-IPC Sizing & Rigid Idle Geometry
-* **Locked Idle Bounds**: The idle minimalist HUD dimensions are rigidly invariant at `200×56` px across Rust and TypeScript. Expanding states (`prompt`, `response`, `error`) never overwrite or drift the idle HUD geometry in `~/.brainstorm.json`.
+### 13.6 Single-IPC Sizing, Rigid Idle Geometry & Ambient Ergonomics
+* **Locked Idle Bounds**: The idle minimalist HUD dimensions are rigidly invariant at `200×56` px across Rust and TypeScript. Expanding states (`prompt` at `560×170`, `response` at `560×320`, `error`) never overwrite or drift the idle HUD geometry in `~/.brainstorm.json`.
+* **Widened Prompt Box & Enhanced Legibility**: The prompt input and response cards are widened by 100px (to 560px), with font size elevated to `13.5px` (`text-[13.5px]`), providing comfortable multi-line typing and code reading in floating ambient mode.
+* **Distraction-Free UI**: The LLM model button/badge is excluded from overlay mode to keep the ambient pill focused strictly on the prompt and response stream.
 * **Deduplicated IPC**: Sizing operations route exclusively through the native `set_overlay_size` command, eliminating duplicate `win.setSize()` IPC roundtrips.
 * **RAF Throttling**: Grip resizing on the prompt box is throttled with `requestAnimationFrame`, preventing IPC flooding during pointer drag interactions.
 

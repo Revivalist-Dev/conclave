@@ -1,6 +1,6 @@
 import { spawnSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { repos } from '../db';
 import { supervisor } from '../processes/supervisor';
 import { pluginManager } from '../plugins';
@@ -87,16 +87,24 @@ export class LightweightMcpServer {
 		});
 	}
 
-	public async handleJsonRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
+	public async handleJsonRpc(req: JsonRpcRequest): Promise<JsonRpcResponse | null> {
 		const { id, method, params } = req;
+		const isNotification = id === undefined || id === null;
 
+		// JSON-RPC 2.0 notifications: server MUST NOT send a reply
 		switch (method) {
+			case 'notifications/initialized':
+			case 'notifications/cancelled': {
+				return null;
+			}
+
 			case 'initialize': {
+				const requestedVersion = params?.protocolVersion || '2024-11-05';
 				return {
 					jsonrpc: '2.0',
 					id,
 					result: {
-						protocolVersion: '2024-11-05',
+						protocolVersion: requestedVersion,
 						serverInfo: {
 							name: 'brAInstorm-orchestrator',
 							version: '0.1.0'
@@ -111,6 +119,7 @@ export class LightweightMcpServer {
 			}
 
 			case 'tools/list': {
+				if (isNotification) return null;
 				return {
 					jsonrpc: '2.0',
 					id,
@@ -121,27 +130,49 @@ export class LightweightMcpServer {
 			}
 
 			case 'tools/call': {
+				if (isNotification) return null;
 				const toolName = params?.name;
+				if (typeof toolName !== 'string' || !toolName.trim()) {
+					return {
+						jsonrpc: '2.0',
+						id,
+						error: { code: -32602, message: 'Invalid params: "name" must be a non-empty string' }
+					};
+				}
 				const args = params?.arguments || {};
-				if (toolName.startsWith('plugin_')) {
+				let effectiveToolName = toolName;
+				if (!toolName.startsWith('plugin_') && !this.tools.has(toolName)) {
+					const pluginTools = pluginManager.listMcpTools();
+					const match = pluginTools.find((t) => t.name === `plugin_danyapi_${toolName}` || t.name.endsWith(`_${toolName}`));
+					if (match) {
+						effectiveToolName = match.name;
+					}
+				}
+
+				if (effectiveToolName.startsWith('plugin_')) {
 					try {
-						const result = await pluginManager.callTool(toolName, args);
+						const result = (await pluginManager.callTool(effectiveToolName, args)) as any;
+						if (result && typeof result === 'object') {
+							result.tool_name = result.tool_name || effectiveToolName;
+						}
 						return { jsonrpc: '2.0', id, result };
 					} catch (err: any) {
 						return {
 							jsonrpc: '2.0',
 							id,
 							result: {
+								tool_name: effectiveToolName,
 								content: [{ type: 'text', text: `Plugin tool failed: ${err.message}` }],
 								isError: true
 							}
 						};
 					}
 				}
-				return this.executeTool(id, toolName, args);
+				return this.executeTool(id, effectiveToolName, args);
 			}
 
 			case 'resources/list': {
+				if (isNotification) return null;
 				return {
 					jsonrpc: '2.0',
 					id,
@@ -163,6 +194,7 @@ export class LightweightMcpServer {
 			}
 
 			case 'resources/read': {
+				if (isNotification) return null;
 				const uri = params?.uri;
 				if (uri === 'brainstorm://db/stats') {
 					const tabs = repos.getAllTabs();
@@ -203,6 +235,7 @@ export class LightweightMcpServer {
 			}
 
 			default:
+				if (isNotification) return null;
 				return {
 					jsonrpc: '2.0',
 					id,
@@ -215,31 +248,68 @@ export class LightweightMcpServer {
 		try {
 			if (name === 'run_command') {
 				const cmd = args.command;
-				const cwd = args.cwd || this.rootDir;
-				const res = spawnSync('sh', ['-c', cmd], { cwd, encoding: 'utf-8', timeout: 30000 });
+				if (typeof cmd !== 'string' || !cmd.trim()) {
+					return {
+						jsonrpc: '2.0',
+						id,
+						result: { tool_name: name, content: [{ type: 'text', text: 'Error: "command" parameter is required' }], isError: true }
+					};
+				}
+				let cwd = this.rootDir;
+				if (args.cwd && typeof args.cwd === 'string') {
+					const resolvedCwd = resolve(this.rootDir, args.cwd);
+					if (resolvedCwd.startsWith(this.rootDir)) {
+						cwd = resolvedCwd;
+					}
+				}
+				const res = spawnSync('sh', ['-c', cmd], {
+					cwd,
+					encoding: 'utf-8',
+					timeout: 30000,
+					maxBuffer: 10 * 1024 * 1024
+				});
+				const stdout = (res.stdout || '').trim();
+				const stderr = (res.stderr || '').trim();
+				let text = '';
+				if (res.status !== 0) {
+					text = stderr ? (stdout ? `${stdout}\n\n[stderr]:\n${stderr}` : stderr) : (stdout || `Command failed with code ${res.status}`);
+				} else {
+					text = stdout ? (stderr ? `${stdout}\n\n[stderr]:\n${stderr}` : stdout) : (stderr || '(command completed with no output)');
+				}
 				return {
 					jsonrpc: '2.0',
 					id,
 					result: {
-						content: [
-							{
-								type: 'text',
-								text: res.stdout || res.stderr || '(command completed with no output)'
-							}
-						],
+						tool_name: name,
+						content: [{ type: 'text', text }],
 						isError: res.status !== 0
 					}
 				};
 			}
 
 			if (name === 'read_file') {
-				const filePath = args.path.startsWith('/') ? args.path : join(this.rootDir, args.path);
+				if (!args.path || typeof args.path !== 'string') {
+					return {
+						jsonrpc: '2.0',
+						id,
+						result: { tool_name: name, content: [{ type: 'text', text: 'Error: "path" parameter is required' }], isError: true }
+					};
+				}
+				const filePath = resolve(this.rootDir, args.path);
+				if (!filePath.startsWith(this.rootDir)) {
+					return {
+						jsonrpc: '2.0',
+						id,
+						result: { tool_name: name, content: [{ type: 'text', text: `Access denied: path '${args.path}' is outside project root` }], isError: true }
+					};
+				}
 				if (!existsSync(filePath)) {
 					return {
 						jsonrpc: '2.0',
 						id,
 						result: {
-							content: [{ type: 'text', text: `File not found: ${filePath}` }],
+							tool_name: name,
+							content: [{ type: 'text', text: `File not found: ${args.path}` }],
 							isError: true
 						}
 					};
@@ -249,19 +319,35 @@ export class LightweightMcpServer {
 					jsonrpc: '2.0',
 					id,
 					result: {
+						tool_name: name,
 						content: [{ type: 'text', text: content }]
 					}
 				};
 			}
 
 			if (name === 'write_file') {
-				const filePath = args.path.startsWith('/') ? args.path : join(this.rootDir, args.path);
-				writeFileSync(filePath, args.content, 'utf-8');
+				if (!args.path || typeof args.path !== 'string') {
+					return {
+						jsonrpc: '2.0',
+						id,
+						result: { tool_name: name, content: [{ type: 'text', text: 'Error: "path" parameter is required' }], isError: true }
+					};
+				}
+				const filePath = resolve(this.rootDir, args.path);
+				if (!filePath.startsWith(this.rootDir)) {
+					return {
+						jsonrpc: '2.0',
+						id,
+						result: { tool_name: name, content: [{ type: 'text', text: `Access denied: path '${args.path}' is outside project root` }], isError: true }
+					};
+				}
+				writeFileSync(filePath, args.content || '', 'utf-8');
 				return {
 					jsonrpc: '2.0',
 					id,
 					result: {
-						content: [{ type: 'text', text: `Successfully wrote ${args.content.length} bytes to ${filePath}` }]
+						tool_name: name,
+						content: [{ type: 'text', text: `Successfully wrote ${(args.content || '').length} bytes to ${args.path}` }]
 					}
 				};
 			}
@@ -271,6 +357,7 @@ export class LightweightMcpServer {
 					jsonrpc: '2.0',
 					id,
 					result: {
+						tool_name: name,
 						content: [
 							{
 								type: 'text',
@@ -291,6 +378,7 @@ export class LightweightMcpServer {
 				jsonrpc: '2.0',
 				id,
 				result: {
+					tool_name: name,
 					content: [{ type: 'text', text: `Execution failed: ${err.message}` }],
 					isError: true
 				}

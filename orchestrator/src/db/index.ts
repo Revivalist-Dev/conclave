@@ -137,9 +137,6 @@ export const repos = {
 	getAllTabs: () => {
 		return db.query('SELECT * FROM tabs ORDER BY updated_at DESC').all() as any[];
 	},
-	getConversations: () => {
-		return db.query('SELECT * FROM tabs ORDER BY updated_at DESC').all() as any[];
-	},
 	renameTab: (tabId: string, name: string) => {
 		const now = Date.now();
 		db.prepare('UPDATE tabs SET name = ?, updated_at = ? WHERE id = ?').run(name, now, tabId);

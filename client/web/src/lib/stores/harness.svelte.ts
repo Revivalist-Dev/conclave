@@ -107,6 +107,8 @@ class HarnessStore {
 	pendingNewChatGroup = $state<string>('Discussions');
 	lastProjectDirectory = $state<string>(typeof localStorage !== 'undefined' ? localStorage.getItem('brainstorm_last_project_dir') || '' : '');
 	selectedLlmProvider = $state<string>('DeepSeek');
+	private inFlightFetches = new Set<string>();
+	private lastTabFetchTime = new Map<string, number>();
 	// Active model persists across sessions; both windows (desktop + HUD) share
 	// this store and its setActiveModel/applyTabLastModel functions.
 	selectedLlmModel = $state<string>(
@@ -331,23 +333,44 @@ class HarnessStore {
 		}
 	}
 
-	async fetchTabMessages(tabId: string, days = 7) {
+	async fetchTabMessages(tabId: string, days = 7, force = false) {
 		if (!tabId) return;
 
-		// 1. Instantly fetch messages via direct HTTP API to ensure immediate data readiness
-		try {
-			const res = await fetch(`http://127.0.0.1:4000/api/tabs/${tabId}/messages?days=${days}`);
-			if (res.ok) {
-				const messages = await res.json();
-				this.handleTabDetail(tabId, messages);
-			}
-		} catch (err) {
-			console.warn('[Harness] HTTP fetchTabMessages failed:', err);
+		// The overlay HUD does not render conversation threads; skip background message hydration
+		if (typeof window !== 'undefined' && window.location.pathname.startsWith('/overlay') && !force) {
+			return;
 		}
 
-		// 2. Also send over WebSocket if connected
-		if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
-			(window as any).__orchestratorSocket.send({ type: 'TAB_FETCH', tabId, days });
+		const now = Date.now();
+		const lastTime = this.lastTabFetchTime.get(tabId) || 0;
+		if (!force && this.inFlightFetches.has(tabId)) {
+			return;
+		}
+		if (!force && now - lastTime < 1500) {
+			return;
+		}
+
+		this.inFlightFetches.add(tabId);
+		this.lastTabFetchTime.set(tabId, now);
+
+		try {
+			// 1. If WebSocket is connected, send TAB_FETCH as the primary transport
+			if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
+				(window as any).__orchestratorSocket.send({ type: 'TAB_FETCH', tabId, days });
+			} else {
+				// 2. Direct HTTP API fallback when disconnected
+				const res = await fetch(`http://127.0.0.1:4000/api/tabs/${tabId}/messages?days=${days}`);
+				if (res.ok) {
+					const messages = await res.json();
+					this.handleTabDetail(tabId, messages);
+				}
+			}
+		} catch (err) {
+			console.warn('[Harness] fetchTabMessages failed:', err);
+		} finally {
+			setTimeout(() => {
+				this.inFlightFetches.delete(tabId);
+			}, 300);
 		}
 	}
 
@@ -385,7 +408,7 @@ class HarnessStore {
 				if (!isNaN(d) && d > 0) this.settings.overlayResponseDuration = d;
 			}
 		}
-		this.initFromServer(data.projects || [], data.tabs || data.conversations || []);
+		this.initFromServer(data.projects || [], data.tabs || []);
 	}
 
 	setSetting(key: string, value: any) {
@@ -407,9 +430,13 @@ class HarnessStore {
 	}
 
 	async loadInitialData() {
-		// If WebSocket connected, request settings via LOAD_SETTINGS
+		// If WebSocket connected, request settings via requestSettings() which coalesces across windows
 		if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
-			(window as any).__orchestratorSocket.send({ type: 'LOAD_SETTINGS' });
+			if (typeof (window as any).__orchestratorSocket.requestSettings === 'function') {
+				(window as any).__orchestratorSocket.requestSettings();
+			} else {
+				(window as any).__orchestratorSocket.send({ type: 'LOAD_SETTINGS' });
+			}
 			return;
 		}
 		try {
@@ -482,8 +509,11 @@ class HarnessStore {
 				}
 				// Continuing the active conversation with its last-used model
 				this.applyTabLastModel(this.conversations.find((c) => c.id === target));
-				// Load last few days of chats for whichever tab is open
-				this.fetchTabMessages(target, 7);
+				// Load last few days of chats for whichever tab is open (if not already loaded)
+				const targetConv = this.conversations.find((c) => c.id === target);
+				if (!targetConv || !targetConv.messages || targetConv.messages.length === 0) {
+					this.fetchTabMessages(target, 7);
+				}
 			}
 		}
 	}
