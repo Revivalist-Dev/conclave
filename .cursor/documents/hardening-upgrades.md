@@ -715,6 +715,31 @@ bootstrap so the running artefact is inspectable.
 **How to test it worked.** Boot twice with a recorded digest and assert the image id is identical; then
 push a commit to a scratch fork and assert the pinned build is unaffected.
 
+**Reconnaissance, 2026-10-15 — the state of the fork, measured rather than assumed, and not yet acted
+on.** `gh api repos/mindflowgo/DanyAPI` returns a repo that is `fork: true`, `archived: false`,
+`default_branch: "main"`, last pushed **2026-09-07T23:17:43Z**, with **1 star**; its `parent` is
+`FANATFANATA/DanyAPI`; and `gh api repos/FANATATFANATA/DanyAPI` returns **404 Not Found**, so the upstream
+really is gone and this fork is the only source. The fork's `main` tip is **`e551331ed7d6`**, committed
+`2026-09-07T23:21:26Z`, message `Merge upstream/main into main` — so the fork's whole history is four
+minutes of activity and it has not moved in the eleven months since. `orchestrator/src/bootstrap/index.ts`
+clones `https://github.com/mindflowgo/DanyAPI.git` with `--depth 1` and no `--branch`, which resolves to
+that tip today and to whatever else it becomes if the fork is ever touched again. There is **no local
+`api_sandbox/DanyAPI`** on this machine, so the dev clone path has not even been exercised here.
+
+**The shape decided for the fix, so the next session need not re-derive it.** Pin the *source* first: it
+is the sharpest of the three references and the cheapest to make exact. Clone as now, then
+`git fetch --depth 1 origin <sha>`, check the recorded commit out, verify `HEAD` equals the pin, warn
+loudly when it does not, and record the resolved sha in `settings` so what is running is inspectable. That
+makes the **code** reproducible. It does **not** make the **image** reproducible, and the two halves must
+not be conflated in a Fix paragraph: the fork's own `Dockerfile` still opens with a bare
+`FROM python:3.14-slim` and installs seven unversioned packages from its own `requirements.txt`, so
+pinning the clone leaves a moving base image underneath it. Closing that means either vendoring a compose
+file and Dockerfile Conclave owns, or resolving a digest for the base image and for
+`ghcr.io/mindflowgo/danyapi` — and the second cannot be checked from here, because that registry path is
+still only prose in `ARCHITECTURE.md` (`rg 'ghcr'` returns three hits, all documentation) while the smoke
+test on this machine built a local `danyapi-danyapi:latest` instead. Naming the vendor-or-digest choice as
+an **open question** is the honest form until the image can be observed.
+
 ### S2 — No Content-Security-Policy, with the global Tauri API exposed
 
 **Evidence.** `client/tauri/src-tauri/tauri.conf.json:46` — `"csp": null` — and `:14` —
