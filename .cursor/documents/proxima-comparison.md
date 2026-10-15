@@ -188,7 +188,7 @@ architectural work each implies, largest first.
 
 ## 3. What Conclave has that Proxima does not
 
-Nine capabilities, each with the `file:line` on the Conclave side.
+Eight capabilities, each with the `file:line` on the Conclave side.
 
 1. **A native desktop shell instead of Electron**, with two windows and a real ambient HUD:
    [`lib.rs:9-412`](../../client/tauri/src-tauri/src/lib.rs).
@@ -198,24 +198,28 @@ Nine capabilities, each with the `file:line` on the Conclave side.
    [`lib.rs:205-236`](../../client/tauri/src-tauri/src/lib.rs).
 3. **Multi-monitor off-screen clamping** for both windows:
    [`lib.rs:56-112`](../../client/tauri/src-tauri/src/lib.rs).
-4. **A macOS Spaces integration** putting the HUD on all Spaces above fullscreen apps:
-   [`lib.rs:114-127`](../../client/tauri/src-tauri/src/lib.rs).
-5. **A plugin engine** that installs MCP servers from a git URL, namespaces their tools, health-checks
+4. **A plugin engine** that installs MCP servers from a git URL, namespaces their tools, health-checks
    process plugins, and loads JS scaffolds for backends that have no MCP server:
    [`plugins/index.ts:265-292`](../../orchestrator/src/plugins/index.ts),
    [`plugins/index.ts:350-470`](../../orchestrator/src/plugins/index.ts),
    [`plugins/index.ts:518-563`](../../orchestrator/src/plugins/index.ts).
-6. **A plugin management UI** with status, tool counts, enable and remove:
+5. **A plugin management UI** with status, tool counts, enable and remove:
    [`settings/+page.svelte:663-765`](../../client/web/src/routes/(desktop)/settings/+page.svelte).
-7. **MCP resources** on the orchestrator endpoint:
+6. **MCP resources** on the orchestrator endpoint:
    [`mcp/index.ts:174-235`](../../orchestrator/src/mcp/index.ts).
-8. **Container supervision** with `docker compose up -d`, a live log streamer and a health poll:
+7. **Container supervision** with `docker compose up -d`, a live log streamer and a health poll:
    [`supervisor.ts:114-233`](../../orchestrator/src/processes/supervisor.ts).
-9. **Thread-level chat ergonomics** Proxima does not have: archive, Markdown export, first-6 with
+8. **Thread-level chat ergonomics** Proxima does not have: archive, Markdown export, first-6 with
    show-all, `<think>` rendering with collapsible code blocks, and a token badge per turn:
    [`harness.svelte.ts:563-600`](../../client/web/src/lib/stores/harness.svelte.ts),
    [`Sidebar.svelte:285`](../../client/web/src/lib/components/Sidebar.svelte),
    [`ConversationView.svelte:9-179`](../../client/web/src/lib/components/ConversationView.svelte).
+
+**A ninth was removed, not lost.** A macOS Spaces integration that put the HUD on all Spaces above
+fullscreen apps used to sit between items 3 and 4 (it was `#[cfg(target_os = "macos")]` in `lib.rs`,
+setting `NSWindowCollectionBehavior`). Conclave is never built or shipped for macOS, so it and the
+`macos-private-api` feature, the `objc2` dependency table and the `macOSPrivateApi` config key were all
+removed on 2026-10-15. The v1.1 README at commit `f668d54` is where to read what it did.
 
 ---
 

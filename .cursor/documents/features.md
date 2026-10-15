@@ -78,11 +78,12 @@ physical to logical with the scale factor; the overlay records position only and
 target against `available_monitors()`, subtracting a margin, and fall back to
 `(primary.x + 24, primary.y + 100)` when the monitor is gone: [`lib.rs:56-112`](../../client/tauri/src-tauri/src/lib.rs). **[W]**
 
-**macOS Spaces.** `setup_macos_overlay_spaces` sets `NSWindowCollectionBehavior` to
-`CanJoinAllSpaces | FullScreenAuxiliary | IgnoresCycle` through `objc2::msg_send!`, called from both
-`setup()` and `enter_overlay_mode`: [`lib.rs:114-127`](../../client/tauri/src-tauri/src/lib.rs),
-[`lib.rs:190-191`](../../client/tauri/src-tauri/src/lib.rs). macOS-only; the `objc2` dependency is
-gated to `target_os = "macos"` ([`Cargo.toml:29-30`](../../client/tauri/src-tauri/Cargo.toml)). **[W]**
+**Platform scope.** The overlay targets Windows and Linux only. Its always-on-top level is Tauri's
+portable `set_always_on_top`, applied in [`lib.rs`](../../client/tauri/src-tauri/src/lib.rs); an
+earlier platform-specific setup hook set the native window's `NSWindowCollectionBehavior`
+(`CanJoinAllSpaces | FullScreenAuxiliary | IgnoresCycle`) through `objc2::msg_send!` to float the HUD
+above fullscreen apps on every Space, and that hook, its call sites and the `objc2` dependency have
+all been removed. **[W]**
 
 **Overlay mode transition.** `enter_overlay_mode` captures the live main-window rect (only if wider
 than 500px, so an already-shrunk window does not overwrite the good bounds), hides main, clamps and
@@ -95,9 +96,10 @@ reverse and emits `refresh-active-thread` to the main webview directly from Rust
 [`lib.rs:272-282`](../../client/tauri/src-tauri/src/lib.rs). `set_window_always_on_top` is a thin
 wrapper: [`lib.rs:267-270`](../../client/tauri/src-tauri/src/lib.rs). **[W]**
 
-**Dock reopen.** `RunEvent::Reopen` unhides and focuses main when no window is visible; `exit_app`
-and `RunEvent::Exit*` tear the side-loaded orchestrator down:
-[`lib.rs:390-412`](../../client/tauri/src-tauri/src/lib.rs). macOS-only path. **[W]**
+**Lifecycle teardown.** `exit_app` and `RunEvent::Exit*` tear the side-loaded orchestrator down when
+the app exits: [`lib.rs`](../../client/tauri/src-tauri/src/lib.rs). A prior `RunEvent::Reopen` handler
+that unhid and focused the main window on a platform dock event has been removed with the
+platform-specific setup. **[W]**
 
 **Orchestrator side-load.** Production runs the bundled sidecar next to the executable; dev spawns
 `bun src/index.ts` from a located source directory; a port already open is reused and left running,
@@ -484,15 +486,12 @@ only lineage the tree admits to:
 
 ## 8. Sidecar and build pipeline
 
-`build-sidecar.ts` runs at build time only and does five things: detect the host triple from
+`build-sidecar.ts` runs at build time only and does four things: detect the host triple from
 `rustc -Vv` unless `SIDECAR_TRIPLE` is set; `bun build --compile` the orchestrator into
 `client/tauri/src-tauri/binaries/orchestrator-<triple>[.exe]`; `rustc -O` the Rust MCP bridge into
-`conclave-mcp-<triple>[.exe]`; copy the bridge next to its own source for local dev (warning loudly
-on failure, deliberately not silently); and best-effort copy both the bridge and `mcp-server.js` into
-`/Applications/Conclave.app` when that bundle exists:
-[`scripts/build-sidecar.ts:21-98`](../../scripts/build-sidecar.ts). **[W]**, except the `/Applications`
-sync which is macOS-only and cosmetic:
-[`scripts/build-sidecar.ts:80-98`](../../scripts/build-sidecar.ts). **[P]**
+`conclave-mcp-<triple>[.exe]`; and copy the bridge next to its own source for local dev (warning loudly
+on failure, deliberately not silently):
+[`scripts/build-sidecar.ts:21-80`](../../scripts/build-sidecar.ts). **[W]**
 
 The `.exe` suffix is added for Windows because bare `rustc -o <name>` writes the literal name:
 [`scripts/build-sidecar.ts:33-40`](../../scripts/build-sidecar.ts).
@@ -528,14 +527,11 @@ Five `CONCLAVE_*` names are read anywhere:
 
 `PORT` overrides the orchestrator port as well ([`index.ts:12`](../../orchestrator/src/index.ts)).
 
-Two hard-coded development artefacts should not ship. The settings page's dev MCP path is a specific
-developer's checkout — `/Users/fil/Code/Conclave/orchestrator/bin/mcp-server.js` — repeated in the
-copied config, the Cursor instructions and the test command:
-[`settings/+page.svelte:36`](../../client/web/src/routes/(desktop)/settings/+page.svelte),
-[`settings/+page.svelte:41`](../../client/web/src/routes/(desktop)/settings/+page.svelte),
-[`settings/+page.svelte:417`](../../client/web/src/routes/(desktop)/settings/+page.svelte). And the
-MCP tab is macOS-centric (`~/.cursor/mcp.json`, `open -e ~/Library/Application Support/...`):
-[`settings/+page.svelte:380`](../../client/web/src/routes/(desktop)/settings/+page.svelte).
+The settings page's MCP paths were previously hard-coded development artefacts — a specific developer's
+checkout path, repeated in the copied config, the Cursor instructions and the test command, plus a
+platform-specific "open the config file" instruction. They are now derived at runtime and platform-aware,
+so the copied MCP config names a path that exists on the running platform:
+[`settings/+page.svelte`](../../client/web/src/routes/(desktop)/settings/+page.svelte).
 
 **The rename is incomplete in the UI.** The sidebar still renders the pre-rename wordmark as three
 spans, `br` + `AI` + `nstorm`:
@@ -551,7 +547,7 @@ This is the section the upgrade should plan from. Every entry names its evidence
 ### Working (48)
 
 Desktop shell (11): dual-window config, window-state persistence, move tracking, multi-monitor
-clamping, macOS Spaces, overlay mode transition, overlay sizing clamps, always-on-top, dock reopen,
+clamping, overlay mode transition, overlay sizing clamps, always-on-top,
 orchestrator side-load, WS transport with backoff/queue/reconnect, dynamic CORS + origin guard.
 Web client (14): routing groups, the harness store, the socket bridge with cross-window coalescing,
 sidebar + top-6 + show-all, thread menu (rename/archive/export/delete), tabs strip, new-chat modal,

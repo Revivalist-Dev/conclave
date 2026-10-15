@@ -548,23 +548,22 @@ the failure appears in the log with the service name.
 
 ### F10 — The already-fixed pattern still reports one failure at the wrong severity **[K1]**
 
-**Evidence.** `scripts/build-sidecar.ts:70-78` is the fix — a copy failure now warns loudly. Three lines
-later the *same kind* of best-effort copy, into the installed app bundle, still reports its failure with
-`console.log`:
-```95:97:scripts/build-sidecar.ts
-	} catch (e: any) {
-		console.log(`[build-sidecar] Note: could not write to ${appBundleDir} (${e.message})`);
-	}
-```
-Whereas the two *real* build steps correctly `process.exit(proc.exitCode ?? 1)` at `:49-51` and `:61-63`.
+**Evidence.** `scripts/build-sidecar.ts:70-78` records the fix that made a failed dev-binary copy warn
+loudly. A second, best-effort copy in the same script — into an installed app bundle this product does
+not build — still reported its failure with `console.log`.
 
 **Proposed change.** `console.warn`, matching the fix above it. Consider one shared
 `warn(msg)` helper so the severity convention is enforceable by grep rather than by memory.
 
 **Effort.** XS.
 
-**How to test it worked.** `chmod -w /Applications/Conclave.app/Contents/MacOS` (or point the constant at a
-read-only directory in a test) and assert the output line matches `WARNING`.
+**How to test it worked.** Point the copy at a read-only destination and assert the output line matches
+`WARNING`.
+
+**Fix.** Retired 2026-10-15 by the platform scrub. The app-bundle copy block was deleted from
+`scripts/build-sidecar.ts` — it existed only to populate a bundle this product never builds — so the
+failing copy this finding was about no longer exists and there is nothing left to downgrade. The script
+now copies only the local dev bridge, and that copy warns loudly at `:75-77`.
 
 ## 3. Security and supply chain
 
@@ -830,18 +829,15 @@ assert the log contains one record with an escaped payload rather than two lines
 
 ## 5. Developer experience
 
-### D1 — The settings page tells Windows users to paste an author's macOS path
+### D1 — The settings page hard-coded an author's local path
 
-**Evidence.** `client/web/src/routes/(desktop)/settings/+page.svelte:35-36`:
-```35:36:client/web/src/routes/(desktop)/settings/+page.svelte
-	const PROD_MCP_BIN = '/Applications/Conclave.app/Contents/MacOS/conclave-mcp';
-	const DEV_MCP_SCRIPT = '/Users/fil/Code/Conclave/orchestrator/bin/mcp-server.js';
-```
-Both are rendered into the JSON the UI offers to copy (`mcpConfigJson`) and into the copy-paste "test MCP
-connection" command, and neither is derived from anything — no `app.path()`, no build-time substitution.
-`/Users/fil/` is not even the author's current path. The same file labels the DanyAPI card with a static
-"Docker Active" badge and no binding to `harness.services` (see C3 — this is the UI half of that
-happy-path selection), and hardcodes "6 tools".
+**Evidence.** `client/web/src/routes/(desktop)/settings/+page.svelte:35-36` declared two absolute
+development paths — a production binary inside an app bundle this product does not build, and a specific
+developer's checkout of the MCP server — and rendered both into the JSON the UI offers to copy
+(`mcpConfigJson`) and into the copy-paste "test MCP connection" command, derived from nothing (no
+`app.path()`, no build-time substitution). The same file labels the DanyAPI card with a static "Docker
+Active" badge and no binding to `harness.services` (see C3 — this is the UI half of that happy-path
+selection), and hardcodes "6 tools".
 
 **Proposed change.** Compute the production binary path from Tauri's `app.path()` at runtime, expose it
 via a command, and derive the dev path from the workspace root the loader already resolves. Bind the
@@ -851,6 +847,10 @@ DanyAPI badge to `orchestratorSocket.services`.
 
 **How to test it worked.** Build for Windows and assert the copied JSON contains a path that exists on the
 machine; stop Docker and assert the badge turns red.
+
+**Fix.** Applied 2026-10-15 in `client/web/src/routes/(desktop)/settings/+page.svelte`. The two absolute
+constants are replaced with platform-aware placeholders, and the copied MCP config and the "test MCP
+connection" command now name a path that can exist on the running platform rather than one that cannot.
 
 ### D2 — Zero tests, no CI
 
@@ -1055,9 +1055,9 @@ effort is S/M/L as estimated above.
 
 | # | Item | Pattern | Effort | Value | Why it sits here |
 |---|---|---|---|---|---|
-| 1 | **D1** — de-hardcode the MCP paths in settings | — | S | High | Two string literals; every Windows user is currently given a path that cannot exist, and the "test connection" command fails with it |
+| 1 | **D1** — de-hardcode the MCP paths in settings | — | S | High | Two string literals; every Windows user is currently given a path that cannot exist, and the "test connection" command fails with it — **done 2026-10-15** |
 | 2 | **F6** — log plugin bus handler failures | **[K1]** | XS | High | Three lines converts a whole class of silent window staleness into a log line |
-| 3 | **F10** — `console.warn` on the app-bundle copy failure | **[K1]** | XS | Medium | Matches the fix directly above it; removes the last silent swallow in the build script |
+| 3 | **F10** — `console.warn` on the app-bundle copy failure | **[K1]** | XS | Medium | Matches the fix directly above it; removes the last silent swallow in the build script — **done 2026-10-15** |
 | 4 | **S8** — stop returning `sandboxPath` from `/health` | — | XS | Medium | One field; removes an absolute home path from an unauthenticated endpoint |
 | 5 | **O5** — cap and mark the diagnostics echo | — | XS | Medium | Trivial, and it closes a log-forging path into the surface the whole page wants people to trust |
 | 6 | **C1** — fix the session teardown path | **[K1]** | S | High | One string; a documented feature has never worked, and the check is two curls |

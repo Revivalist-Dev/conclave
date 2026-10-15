@@ -94,9 +94,9 @@ Current. The tracked lockfile is a minor behind on its own resolution (see Lockf
 
 ## Cargo — [`client/tauri/src-tauri/Cargo.toml`](../../client/tauri/src-tauri/Cargo.toml)
 
-9 dependencies across three blocks: `[build-dependencies]` (line 15), `[dependencies]` (18–20), the
-`cfg(target_os = "macos")` block (23) and the `cfg(unix)` block (26), with the two WebSocket crates at the
-foot (29–31).
+8 dependencies across three blocks: `[build-dependencies]` (line 15), `[dependencies]` (18–20) and the
+`cfg(unix)` block (26), with the two WebSocket crates at the foot (29–31). A platform-gated `objc2`
+dependency, declared in its own table, has since been removed with the platform scrub.
 
 | Crate | Line | Declared | Latest stable | Gap | Breaking? |
 |---|---|---|---|---|---|
@@ -122,9 +122,15 @@ a reader who sees "3" on crates.io does not mistake it for a missed major.
 > `tokio`, `tokio-tungstenite` and `futures-util` sat under `[target."cfg(unix)".dependencies]`, while
 > `src/orchestrator_ws.rs` uses all three with **no `cfg` gate** and `src/lib.rs:7` includes that module
 > unconditionally. So the Tauri client could not link on Windows at all — a pre-existing defect that
-> predates every bump on this page. The three lines moved to `[dependencies]`; `libc` stays unix-only and
-> `objc2` stays macOS-only. Verified from `cargo metadata`: the three now report
-> `target=(none - all platforms)`. Committed as `d86170e`.
+> predates every bump on this page. The three lines moved to `[dependencies]`; `libc` stays unix-only. `objc2` was macOS-only and **is gone** —
+the whole `[target."cfg(target_os = "macos")".dependencies]` table was removed on 2026-10-15, along with
+the `macos-private-api` Tauri feature and the `macOSPrivateApi` config key, because this product is never
+built or shipped for macOS. Verified from `cargo metadata`: the three now report
+`target=(none - all platforms)`. Committed as `d86170e`.
+> **A correction, same day.** This page used to read "`libc` stays unix-only and `objc2` stays
+> macOS-only", which was true when it was written and is not now. A dependency that is correctly *gated*
+> can still be the wrong dependency to declare at all, and gating was the wrong question to stop at once
+> the target set was decided.
 > **What this teaches about reading this page:** the gap table above asks "is this dependency current",
 > which is a different question from "is it declared in the right place". A dependency can be perfectly
 > up to date and still not link on the platform you are building for, and only compiling on that platform

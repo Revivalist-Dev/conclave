@@ -14,7 +14,7 @@ The system is designed with strict separation of concerns, zero host script poll
 |                                                                                                   |
 |   +--------------------------------------------------+          +-----------------------------+   |
 |   |                client/tauri (v2)                 |          |         client/web          |   |
-|   |  Native desktop shell (macOS/Win)                |          | SvelteKit 5 + Tailwind CSS  |   |
+|   |  Native desktop shell (Win/Linux)                |          | SvelteKit 5 + Tailwind CSS  |   |
 |   |  - Dual-window (Main chat + Ambient overlay)     |          | - Reactive runes store      |   |
 |   |  - Native WS Transport (orchestrator_ws.rs)      |<---------| - IPC bridge: ws_send,      |   |
 |   |    • Single persistent connection to :4000/ws    | events:  |   orchestrator-message,     |   |
@@ -87,7 +87,6 @@ The system is designed with strict separation of concerns, zero host script poll
 Conclave/
 ├── assets/                      # Master application icons and brand graphics
 │   ├── conclave-app-icon.png  # 1024x1024 master icon
-│   ├── conclave-app-icon.icns # macOS native icon bundle
 │   └── conclave-app-icon.ico  # Windows multi-resolution icon
 │
 ├── client/
@@ -97,7 +96,7 @@ Conclave/
 │   │   │   │   ├── components/  # Sidebar, TabsHeader, PromptInput, ConversationView, NewChatModal
 │   │   │   │   ├── stores/      # Reactive harness store (Svelte 5 runes: harness.svelte.ts)
 │   │   │   │   ├── services/    # Tauri IPC-driven socket client (orchestratorSocket.svelte.ts)
-│   │   │   │   └── utils/       # Window drag utilities for macOS frameless overlay
+│   │   │   │   └── utils/       # Window drag utilities for the frameless overlay
 │   │   │   └── routes/          # SvelteKit routes: (desktop)/ (main window) & overlay/ (ambient HUD)
 │   │   ├── package.json
 │   │   └── vite.config.ts       # Vite + SvelteKit plugin config + static adapter
@@ -110,7 +109,7 @@ Conclave/
 │   │   │   ├── capabilities/    # Tauri security capabilities (window drag, events, etc.)
 │   │   │   ├── icons/           # Generated cross-platform desktop icons
 │   │   │   └── src/
-│   │   │       ├── main.rs      # Desktop entrypoint & AppKit Spaces configuration
+│   │   │       ├── main.rs      # Desktop entrypoint & window setup
 │   │   │       ├── orchestrator_ws.rs     # Native WebSocket transport, offline queue, auto-reconnect
 │   │   │       └── orchestrator_loader.rs # Orchestrator process lifecycle supervisor
 │   │   └── package.json
@@ -165,7 +164,7 @@ Conclave/
   - **Window Dragging (`drag.ts`)**: Binds primary mouse drag gestures to `window.__TAURI__.window.getCurrentWindow().startDragging()`, guarding interactive controls (`button`, `input`, `textarea`, `[role="tab"]`) to eliminate WebKit drag gesture locking.
 
 ### 3.2 `client/tauri` (Tauri v2 Desktop Shell)
-- **Role**: Native macOS/Windows frameless application wrapper, multi-window coordinator, and process/transport supervisor.
+- **Role**: Native Windows/Linux frameless application wrapper, multi-window coordinator, and process/transport supervisor.
 - **Tech Stack**: Tauri v2, Rust 2021 edition, Tokio async runtime, `tokio-tungstenite`.
 - **Subsystems**:
   - **Native WebSocket Transport (`orchestrator_ws.rs`)**:
@@ -179,7 +178,7 @@ Conclave/
     - Implements graceful shutdown on Unix via `SIGTERM` with a 500ms timeout before falling back to `kill()`, ensuring zero zombie node/bun processes on app exit.
   - **Window Capabilities & Styling**:
     - `titleBarStyle: "Overlay"` with hidden window title for edge-to-edge seamless window frame.
-    - Native macOS `NSFloatingWindowLevel` and AppKit Spaces collection behaviors configured via `objc2`.
+    - Overlay window level set through Tauri's portable `set_always_on_top` (overlay on, main off).
 
 ### 3.3 `orchestrator` (Bun / TypeScript Engine)
 - **Role**: Central coordinator managing SQLite persistence, LLM stream routing, Docker supervision, MCP tools, and plugins.
@@ -206,7 +205,7 @@ All entity IDs use **Base58** encoding (alphabet: `123456789ABCDEFGHJKLMNPQRSTUV
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PROJECT  (3 b58 chars, sequential)                                │
-│  id: "112"  name: "Website"  directory: "/Users/fil/Code/..."      │
+│  id: "112"  name: "Website"  directory: "C:/Code/project/..."      │
 │  skills: ["code-review", ...]  metadata: { instructions: "..." }   │
 │                                                                     │
 │  ┌───────────────────────────────────┐  ┌─────────────────────────┐ │
@@ -666,9 +665,9 @@ Conclave enforces defense-in-depth isolation across browser vectors, process exe
 
 ---
 
-## 13. Window Management, Multi-Monitor Safety & macOS Spaces Architecture
+## 13. Window Management, Multi-Monitor Safety & Overlay Architecture
 
-Conclave utilizes a dual-window model in Tauri v2 coordinated with native macOS AppKit APIs for robust floating HUD operation:
+Conclave utilizes a dual-window model in Tauri v2 for robust floating HUD operation:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -677,29 +676,27 @@ Conclave utilizes a dual-window model in Tauri v2 coordinated with native macOS 
 │   ┌───────────────────────────┐      ┌───────────────────────────┐     │
 │   │ "main" WebviewWindow      │      │ "overlay" WebviewWindow   │     │
 │   │ Full desktop chat UI      │      │ Transparent HUD & Prompt  │     │
-│   │ Normal window level       │      │ NSFloatingWindowLevel     │     │
+│   │ Normal window level       │      │ Always-on-top level       │     │
 │   │ TitleBarStyle: Overlay    │      │ Frameless, Transparent   │     │
 │   └─────────────┬─────────────┘      └─────────────┬─────────────┘     │
 │                 │                                  │                   │
 │                 ▼                                  ▼                   │
 │   ┌──────────────────────────────────────────────────────────────┐     │
-│   │ NATIVE PLATFORM INTEGRATIONS (macOS / AppKit via objc2)      │     │
+│   │ NATIVE WINDOW INTEGRATIONS (Tauri v2)                        │     │
 │   │                                                              │     │
-│   │ 1. NSWindowCollectionBehavior:                               │     │
-│   │    • CanJoinAllSpaces       : Follows across all Spaces     │     │
-│   │    • FullScreenAuxiliary    : Floats above fullscreen apps   │     │
-│   │    • IgnoresCycle           : Excluded from Cmd+Tab cycle   │     │
+│   │ 1. Always-On-Top Window Levels:                              │     │
+│   │    • Overlay window: set_always_on_top(true)                 │     │
+│   │    • Main window:    set_always_on_top(false)                │     │
 │   │                                                              │     │
 │   │ 2. Multi-Monitor Coordinate Clamping:                        │     │
 │   │    • available_monitors() bounds validation                  │     │
 │   │    • Off-screen recovery (unplugged monitors fallback)       │     │
 │   │                                                              │     │
 │   │ 3. Native Move Persistence:                                  │     │
-│   │    • WindowEvent::Moved auto-persists to ~/.conclave.json  │     │
+│   │    • WindowEvent::Moved auto-persists to ~/.conclave.json    │     │
 │   │                                                              │     │
-│   │ 4. Lifecycle & Dock Reopen:                                  │     │
-│   │    • RunEvent::Reopen unhides main when clicking Dock icon   │     │
-│   │    • exit_app terminates all processes cleanly (no zombies) │     │
+│   │ 4. Application Lifecycle:                                    │     │
+│   │    • exit_app terminates all processes cleanly (no zombies)  │     │
 │   └──────────────────────────────────────────────────────────────┘     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -708,19 +705,18 @@ Conclave utilizes a dual-window model in Tauri v2 coordinated with native macOS 
 * When switching modes (`enter_overlay_mode`, `exit_overlay_mode`) or on app launch, target coordinates `(x, y)` from `~/.conclave.json` are validated against `app.available_monitors()`.
 * If a target position lands outside all active display viewports (e.g. secondary monitor was unplugged or arrangement changed), the window is clamped safely to the primary monitor (`x: mon_x + 24.0, y: mon_y + 100.0` for overlay).
 
-### 13.2 macOS Spaces & Fullscreen Integration
-* Regular always-on-top windows in macOS bind strictly to the virtual desktop (Space) where they were opened.
-* On macOS, Conclave configures the underlying `NSWindow` via `objc2`:
-  $$\text{CollectionBehavior} = \text{CanJoinAllSpaces } (1 \ll 0) \mid \text{FullScreenAuxiliary } (1 \ll 8) \mid \text{IgnoresCycle } (1 \ll 6)$$
-* This allows the floating brain HUD to remain visible across all virtual spaces, Mission Control, and fullscreen IDEs/browsers without vanishing.
+### 13.2 Platform Scope: Windows & Linux Only
+* Conclave targets Windows and Linux only, and is never built or shipped for any other platform.
+* Earlier revisions configured the overlay through the native window layer (an `objc2` dependency plus the Tauri native-private-API feature) so the HUD floated above fullscreen apps on every virtual Space.
+* That configuration, its dependency, and its setup hook have all been removed, because the product does not target that platform; the floating HUD relies on portable always-on-top behaviour instead.
 
 ### 13.3 Window Move Tracking & Persistence
 * Native `WindowEvent::Moved` events captured in Tauri's event loop automatically update `state.minimalist.x/y` or `state.normal.x/y` and persist them to `~/.conclave.json`.
 * Both frontend layouts (`(desktop)/+layout.svelte` and `overlay/+page.svelte`) call `initWindowListeners()` to register window resize and move synchronization.
 
-### 13.4 Application Lifecycle & Dock Reopen
+### 13.4 Application Lifecycle
 * **Clean Termination**: The overlay's Quit command invokes native `exit_app` (`app.exit(0)`), ensuring the main window, overlay, and background supervisor processes terminate simultaneously with zero orphan/zombie processes.
-* **Dock Reopen Handler**: Listens for `tauri::RunEvent::Reopen`. If clicked in the macOS Dock while in minimalist mode or with no visible windows, it automatically unhides and focuses the main window.
+* **Reopen Handling**: The prior handler for a platform dock-reopen event (unhiding and focusing the main window) was removed with the platform-specific setup. Neither supported platform exposes an equivalent event, so window restoration is driven from the frontend instead.
 
 ### 13.5 Cross-Window Event Bridge & Multi-Layer Thread Synchronization
 * **Cross-Window Handover**: When transitioning from the ambient overlay to the full desktop chat ("Open Chat" or "Restore Full Window"):

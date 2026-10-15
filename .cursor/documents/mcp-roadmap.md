@@ -94,7 +94,7 @@ Neither bridge implements a single protocol method. Each reads newline-delimited
 | Failure on the wire | JSON-RPC error object, always ([`:56`](../../orchestrator/bin/mcp-server.js), `:69`) | `write_error` funnels every path ([`:121`](../../crates/conclave-mcp/src/main.rs)) |
 | Bad `CONCLAVE_MCP_URL` | not guarded — fetch throws, the generic catch answers | warns on stderr, falls back to the default ([`:20`](../../crates/conclave-mcp/src/main.rs)) |
 | Diagnostics | none to stderr | `[conclave-mcp] …` on stderr |
-| Bundled how | copied into the macOS `.app` Resources by `build-sidecar.ts` | the `externalBin` sidecar `binaries/conclave-mcp` |
+| Bundled how | built into `binaries/orchestrator-<triple>` by `build-sidecar.ts` (it previously also copied both binaries into a macOS `.app` Resources folder; that block was removed 2026-10-15, hardening finding F10) | the `externalBin` sidecar `binaries/conclave-mcp` |
 
 Both satisfy the stdio framing rule (one JSON-RPC message per line, nothing else on `stdout`), and
 both refuse to answer a failure with an empty line. Those two properties are the ones to preserve —
