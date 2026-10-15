@@ -19,13 +19,15 @@ tauri = { version = "2", features = ["macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Orchestrator WebSocket bridge (orchestrator_ws.rs). These are NOT unix-only: lib.rs includes the
+# module unconditionally and the file has no cfg gate, so they have to link on every platform. They
+# previously sat under [target."cfg(unix)".dependencies], which silently excluded Windows.
+tokio = { version = "1", features = ["sync", "time", "macros"] }
+tokio-tungstenite = "0.30"
+futures-util = { version = "0.3", features = ["sink"] }
+
 [target."cfg(target_os = \"macos\")".dependencies]
 objc2 = "0.6"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2"
-
-# Orchestrator WebSocket bridge (orchestrator_ws.rs)
-tokio = { version = "1", features = ["sync", "time", "macros"] }
-tokio-tungstenite = "0.30"
-futures-util = { version = "0.3", features = ["sink"] }
