@@ -1,7 +1,9 @@
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { IMAGE_SETTING } from '../bootstrap/pin';
 import { db, repos } from '../db';
+import { imageIdFromComposeImages, parseComposeJson } from './compose';
 import { dedupeInFlight } from './inflight';
 
 export interface ManagedService {
@@ -335,17 +337,9 @@ export class ServiceSupervisor {
 			if (!result.stdout) return 'down';
 
 			// Modern Compose prints one JSON array; older versions print one JSON
-			// object per line. Accept either rather than depending on the version.
-			let entries: any[] = [];
-			if (result.stdout.startsWith('[')) {
-				entries = JSON.parse(result.stdout);
-			} else {
-				entries = result.stdout
-					.split('\n')
-					.map((line) => line.trim())
-					.filter(Boolean)
-					.map((line) => JSON.parse(line));
-			}
+			// object per line. `parseComposeJson` accepts either rather than
+			// depending on the version.
+			const entries = parseComposeJson(result.stdout);
 
 			return entries.some((entry) => {
 				const state = String(entry?.State ?? '').toLowerCase();
@@ -397,6 +391,79 @@ export class ServiceSupervisor {
 		db.prepare(
 			'INSERT OR REPLACE INTO service_state (name, port, status, last_ping, error) VALUES (?, ?, ?, ?, ?)'
 		).run(service.name, service.port, service.status, now, service.error || null);
+		// Every transition into `running` is also the moment the running image
+		// becomes worth recording, and this is the one place they all pass through.
+		if (service.status === 'running') void this.recordImageId(service);
+	}
+
+	/**
+	 * Record which image the running container was built from, so "which image is
+	 * running" is answerable from `GET /api/settings` rather than from memory.
+	 *
+	 * Deliberately not awaited: the boot path must not wait on a second docker
+	 * invocation for a key that is only ever inspected. A failure costs an
+	 * inspectable value, not a healthy service, so it warns and stops there.
+	 * `spawn` rather than `spawnSync` sidesteps the Bun 1.3.14 timed-`spawnSync`
+	 * trap documented on `containerState` above, and this runs at the very end of
+	 * a boot that has already been idle for seconds — exactly where it fires.
+	 */
+	private async recordImageId(service: ManagedService): Promise<void> {
+		try {
+			const imageId = await this.dockerComposeImageId(service);
+			if (!imageId) return;
+			repos.setSetting(IMAGE_SETTING, imageId);
+		} catch (err: any) {
+			console.warn(`[Supervisor] Could not record the ${service.name} image id: ${err?.message || err}`);
+		}
+	}
+
+	/** `docker compose images --format json` for this service, or null. */
+	private dockerComposeImageId(service: ManagedService): Promise<string | null> {
+		return new Promise((resolve) => {
+			let stdout = '';
+			let settled = false;
+			const finish = (value: string | null) => {
+				if (settled) return;
+				settled = true;
+				resolve(value);
+			};
+
+			try {
+				const proc = spawn('docker', ['compose', 'images', '--format', 'json'], {
+					cwd: service.directory,
+					stdio: ['ignore', 'pipe', 'ignore']
+				});
+
+				const timer = setTimeout(() => {
+					try {
+						proc.kill();
+					} catch {}
+					finish(null);
+				}, 15000);
+
+				proc.stdout?.on('data', (data) => {
+					stdout += data.toString();
+				});
+				proc.on('error', () => {
+					clearTimeout(timer);
+					finish(null);
+				});
+				proc.on('close', (code) => {
+					clearTimeout(timer);
+					if (code !== 0) return finish(null);
+					// A parse failure is named rather than swallowed: the alternative
+					// is a settings key that stays empty with no explanation.
+					try {
+						finish(imageIdFromComposeImages(stdout));
+					} catch (err: any) {
+						console.warn(`[Supervisor] Could not parse docker compose images output: ${err?.message || err}`);
+						finish(null);
+					}
+				});
+			} catch {
+				finish(null);
+			}
+		});
 	}
 }
 

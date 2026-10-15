@@ -1,0 +1,19 @@
+# Conclave-owned compose file for the local DanyAPI provider.
+#
+# Written over the copy that ships inside the pinned mindflowgo/DanyAPI checkout
+# (orchestrator/src/bootstrap/index.ts). The service name `danyapi` and the
+# published host port 8000 are contract, not preference: the supervisor probes
+# http://127.0.0.1:8000/v1/models and the plugin manifest declares the same port.
+# `composeContract` in orchestrator/src/bootstrap/compose.ts refuses this file if
+# either drifts, rather than letting a silent mismatch reach the health probe.
+services:
+  danyapi:
+    build: .
+    container_name: danyapi
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./.env
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
