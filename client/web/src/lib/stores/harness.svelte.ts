@@ -603,7 +603,12 @@ class HarnessStore {
 		if (conv) {
 			conv.messages = formattedMessages;
 		} else {
-			const projId = this.serverProjects[0]?.id || '112';
+			// W6: the tab exists server-side, but TAB_DETAIL carries no project_id, so
+			// use the real first project when the list has arrived and leave the field
+			// unset otherwise — never a fabricated id. `initFromServer` fills it in on
+			// the next settings load, and the consumers (`Sidebar`, `TabsHeader`,
+			// `ConversationView`) already fall back to `conv.group` when it is absent.
+			const projId = this.serverProjects[0]?.id;
 			conv = {
 				id: tabId,
 				chatId: tabId,
@@ -636,8 +641,13 @@ class HarnessStore {
 
 		const chosenProvider = providerId || this.selectedLlmProvider || 'DeepSeek';
 		const chosenModel = model || this.selectedLlmModel || 'deepseek-v4-flash';
+		// W6: never invent a project id. `proj.id` is real when the group names a
+		// server project, and `serverProjects[0].id` is the real first project once
+		// the list has arrived. With neither known it stays undefined, and the
+		// orchestrator's TAB_CREATE case assigns the real first project itself
+		// (`payload.projectId || defaultProj?.id`, orchestrator/src/index.ts:441).
 		const proj = this.serverProjects.find((p) => p.name === group);
-		const projectId = proj ? proj.id : (this.serverProjects[0]?.id || '112');
+		const projectId = proj?.id ?? this.serverProjects[0]?.id;
 
 		if (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected') {
 			(window as any).__orchestratorSocket.send({

@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { db, repos } from '../db';
+import { dedupeInFlight } from './inflight';
 
 export interface ManagedService {
 	name: string;
@@ -16,6 +17,9 @@ export interface ManagedService {
 
 export class ServiceSupervisor {
 	private services: Map<string, ManagedService> = new Map();
+	// One entry per service name while a start is in flight; a second caller
+	// awaits that promise instead of running a second `docker compose up -d`.
+	private inFlight: Map<string, Promise<void>> = new Map();
 	private sandboxDir: string;
 
 	constructor() {
@@ -73,11 +77,31 @@ export class ServiceSupervisor {
 		}
 
 		for (const [name] of this.services) {
-			await this.startService(name);
+			try {
+				await this.startService(name);
+			} catch (err: any) {
+				// startService is expected to contain its own failures; anything that
+				// escapes it is a defect in that guard, and whoever handles this
+				// rejection needs to know which service it was.
+				throw new Error(`${name}: ${err?.message || err}`);
+			}
 		}
 	}
 
-	public async startService(name: string) {
+	/**
+	 * Idempotent, concurrency-safe start. Two independent boot paths ask for the
+	 * same service — `startAll()` above and `PluginManager.startPlugin`'s docker
+	 * branch — and with no shared state both would see a dead port and both would
+	 * run `docker compose up -d`, the second recreating the container while the
+	 * first is still being health-polled. The in-flight map makes the later caller
+	 * await the first call's result; the `running` check makes a later caller that
+	 * arrives after the first has settled a no-op.
+	 */
+	public startService(name: string): Promise<void> {
+		return dedupeInFlight(this.inFlight, name, () => this.startServiceOnce(name));
+	}
+
+	private async startServiceOnce(name: string) {
 		const service = this.services.get(name);
 		if (!service) return;
 
@@ -86,6 +110,11 @@ export class ServiceSupervisor {
 			console.log(`[Supervisor] ${name} (DeepSeek/Qwen) is disabled in settings. Skipping.`);
 			service.status = 'stopped';
 			this.recordState(service);
+			return;
+		}
+
+		// Already verified up this boot: satisfied, do not re-issue compose.
+		if (service.status === 'running') {
 			return;
 		}
 
@@ -174,15 +203,22 @@ export class ServiceSupervisor {
 			if (isHealthy) {
 				service.status = 'running';
 				console.log(`[Supervisor] ${service.name} (DeepSeek/Qwen) verified healthy on http://127.0.0.1:${service.port}`);
-			} else if (this.isContainerUp(service)) {
-				// Verified with the daemon, not assumed: the container is up and the
-				// HTTP probe simply has not answered yet — the proxy is warming up.
-				service.status = 'running';
-				console.log(`[Supervisor] ${service.name} container is up (docker compose ps); warming up.`);
 			} else {
-				service.status = 'failed';
-				service.error = 'Health probe never answered and docker compose ps reports no running container';
-				console.warn(`[Supervisor] ${service.name} did not become healthy and the daemon reports no running container.`);
+				// Three states: only a positive report may become `running`, and
+				// only a negative one may be described as the daemon's answer.
+				const state = this.containerState(service);
+				if (state === 'up') {
+					// Verified with the daemon, not assumed: the container is up and the
+					// HTTP probe simply has not answered yet — the proxy is warming up.
+					service.status = 'running';
+					console.log(`[Supervisor] ${service.name} container is up (docker compose ps); warming up.`);
+				} else {
+					service.status = 'failed';
+					service.error = state === 'unknown'
+						? 'Health probe never answered and the container state could not be verified (docker compose ps did not answer)'
+						: 'Health probe never answered and docker compose ps reports no running container';
+					console.warn(`[Supervisor] ${service.name} did not become healthy and the container state is ${state}.`);
+				}
 			}
 			this.recordState(service);
 		} catch (err: any) {
@@ -255,25 +291,56 @@ export class ServiceSupervisor {
 	 * still up, and it can return zero for a container that has already exited,
 	 * so the health probe's silence alone cannot distinguish "warming up" from
 	 * "not there". This is the check that makes the `running` claim honest.
+	 *
+	 * Three states, not two, because "the daemon said no" and "we could not ask"
+	 * are different answers and only the first may be reported as a failure.
+	 *
+	 * **The retry is load-bearing, not defensive.** On Bun 1.3.14
+	 * `spawnSync(..., { timeout: N })` returns `status: null` with
+	 * `error.code === 'ETIMEDOUT'` after ~5 ms — the child never runs — whenever
+	 * the process has been idle in async work for at least N ms. Measured
+	 * directly: a 300 ms and a 5 s idle gap with `timeout: 10000` both succeed;
+	 * an 11 s gap fails instantly; a 35 s gap with `timeout: 30000` fails
+	 * likewise. This probe runs at the end of a 10 s health poll, so it sat
+	 * exactly inside that window and reported every healthy container as absent.
+	 * A spurious failure costs ~5 ms and needs a fresh idle window, so one
+	 * immediate retry clears it; a real hang is still bounded by the timeout.
 	 */
-	private isContainerUp(service: ManagedService): boolean {
-		try {
+	private containerState(service: ManagedService): 'up' | 'down' | 'unknown' {
+		const ps = (): { ok: boolean; stdout: string; detail: string } => {
 			const psRes = spawnSync('docker', ['compose', 'ps', '--format', 'json'], {
 				cwd: service.directory,
 				encoding: 'utf-8',
 				timeout: 10000
 			});
-			if (psRes.status !== 0) return false;
-			const raw = (psRes.stdout || '').trim();
-			if (!raw) return false;
+			if (psRes.error || psRes.status === null) {
+				return { ok: false, stdout: '', detail: psRes.error?.message || 'no exit status' };
+			}
+			if (psRes.status !== 0) {
+				return { ok: false, stdout: '', detail: (psRes.stderr || '').trim() || `exit ${psRes.status}` };
+			}
+			return { ok: true, stdout: (psRes.stdout || '').trim(), detail: '' };
+		};
+
+		try {
+			let result = ps();
+			// See the note above: a spawn error here is usually the Bun timeout
+			// trap, and it reproduces only after an idle gap, so retrying is what
+			// distinguishes "the daemon is unreachable" from "the probe misfired".
+			if (!result.ok) result = ps();
+			if (!result.ok) {
+				console.warn(`[Supervisor] ${service.name} container state could not be read: ${result.detail}`);
+				return 'unknown';
+			}
+			if (!result.stdout) return 'down';
 
 			// Modern Compose prints one JSON array; older versions print one JSON
 			// object per line. Accept either rather than depending on the version.
 			let entries: any[] = [];
-			if (raw.startsWith('[')) {
-				entries = JSON.parse(raw);
+			if (result.stdout.startsWith('[')) {
+				entries = JSON.parse(result.stdout);
 			} else {
-				entries = raw
+				entries = result.stdout
 					.split('\n')
 					.map((line) => line.trim())
 					.filter(Boolean)
@@ -284,10 +351,18 @@ export class ServiceSupervisor {
 				const state = String(entry?.State ?? '').toLowerCase();
 				const status = String(entry?.Status ?? '').toLowerCase();
 				return state === 'running' || status.startsWith('up');
-			});
-		} catch {
-			return false;
+			})
+				? 'up'
+				: 'down';
+		} catch (err: any) {
+			console.warn(`[Supervisor] ${service.name} container state could not be read: ${err?.message || err}`);
+			return 'unknown';
 		}
+	}
+
+	/** True only when the daemon positively reported a running container. */
+	private isContainerUp(service: ManagedService): boolean {
+		return this.containerState(service) === 'up';
 	}
 
 	public stopAll() {

@@ -151,6 +151,41 @@ Return early when `upRes.status !== 0` and the daemon is unreachable.
 
 **Fix.** Applied 2026-10-15 in `orchestrator/src/processes/supervisor.ts`. A new private `isContainerUp(service)` runs `docker compose ps --format json` in `service.directory`, accepts either the single-array or the one-object-per-line shape, and returns true only for an entry whose `State` is `running` or whose `Status` begins with `up`. When `upRes.status !== 0` the code asks the daemon first: if `isContainerUp` is false it sets `service.status = 'failed'`, `service.error = \`docker compose up failed: <stderr>\`` and returns before attaching the log streamer or polling; if the daemon does report a running container it warns and continues, because a non-zero `up` over an already-serving container is not a failure. The 10 × 1 s poll is unchanged, but its `else` no longer claims `running`: `isContainerUp` true now means the container is verified up while the HTTP probe is still warming up, logging `container is up (docker compose ps); warming up.`, and `isContainerUp` false sets `failed` with `Health probe never answered and docker compose ps reports no running container`. The `const`-style comment that asserted an unchecked fact (`// Container is up, proxy still warming up`) is gone. The status-0 path's behaviour and logging are unchanged, and only the claim changed on the paths that were already logging. Proved live twice from `orchestrator/`, each with `CONCLAVE_DATA_DIR` at a fresh temp directory, a spare `PORT`, and a staged `<temp>/DanyAPI/` — the repo's `orchestrator/data/` was checked with `Test-Path` after both boots and stayed absent. Run one set `COMPOSE_PROJECT_NAME` fresh so the build genuinely ran and failed: `GET /health` returned `services[0].status: "failed"` with `error` beginning `docker compose up failed:` and ending `failed to solve: process "/bin/sh -c echo build-must-fail" did not complete successfully: exit code: 1`. Run two used the machine's own `danyapi-danyapi:latest` image, where compose returned zero but the container started and died (`RuntimeError: no valid credentials: set DEEPSEEK_TOKENS or QWEN_TOKENS`, exit code 3): `/health` returned `failed` with `Health probe never answered and docker compose ps reports no running container`, where the pre-fix code recorded `running`. Both live runs also returned `bootstrap.danyApiReady: false` with a non-null `danyError`, which is C2's half observed end to end. **Deviation and a trap worth naming:** the finding's staged test as written — rename `api_sandbox/DanyAPI/Dockerfile` so the build fails — does not by itself force a build, because Compose reuses an existing `danyapi-danyapi:latest` image (built 2026-09-30 on this machine) instead of building when the project and service image names already exist; that is why run one needed `COMPOSE_PROJECT_NAME` and why run two, without it, exercised the poll-timeout branch instead of the early return. Nothing in the tree pins that image, so this is a machine-state hazard for the test rather than a code defect. **Not done:** `service_state` still gains a row from `recordState`, but O3 remains open, so `/health` answers from the in-memory map and a restart still loses it.
 
+**Fix (second half, appended the same day — the check above was itself unreliable).** Run two of the proof
+above is the one to re-read: it reported `failed` with `Health probe never answered and docker compose ps
+reports no running container`, and that reason was **false**. It was produced by `isContainerUp` returning
+`false` for a container that was up, because of a runtime trap this workspace had not measured until now.
+On **Bun 1.3.14**, `spawnSync(..., { timeout: N })` returns `status: null` with `error.code ===
+'ETIMEDOUT'` after about 5 ms — the child never runs — whenever the process has been idle in async work
+for **at least N ms**. Measured directly with `docker --version` as the child: a 300 ms gap and a 5 s gap
+with `timeout: 10000` both succeeded in ~45 ms, an **11 s gap returned `ETIMEDOUT` in 5 ms**, an 11 s gap
+with `timeout: 30000` succeeded, and a 35 s gap with `timeout: 30000` failed the same way. `isContainerUp`
+runs at the end of a 10 s health poll with `timeout: 10000`, so it sat exactly inside that window: **the
+container-state check would have called a healthy, warming-up container absent on every boot**, and C3's
+fix had turned a false `running` into a false `failed` — a different lie, not the absence of one.
+
+The repair is in `orchestrator/src/processes/supervisor.ts`. The probe is now `containerState(service)`,
+returning **`'up' | 'down' | 'unknown'`** rather than a boolean, because "the daemon said no" and "we could
+not ask" are different answers and only the first may be reported as a failure. A spawn error or a null
+status is retried **once** before it is believed — a spurious failure costs ~5 ms and needs a fresh idle
+window, so one immediate retry clears it while a real hang stays bounded by the timeout, and the reason is
+recorded in the docblock so nobody removes the retry as redundant. `isContainerUp` survives as
+`containerState(...) === 'up'` for the early non-zero-`up` branch, where failing on an unverified state is
+still correct. The poll's timeout branch now switches on the three states: `'up'` logs
+`container is up (docker compose ps); warming up.` and sets `running`; `'down'` keeps the old reason; and
+`'unknown'` sets `failed` with `the container state could not be verified (docker compose ps did not
+answer)` — an unverified state is never described as the daemon's answer.
+
+Verified in the inverse direction, which is the case run two got wrong: a staged
+`<temp>/DanyAPI/docker-compose.yml` holding one `alpine:3.20` service (`command: sleep 300`) that is up
+and answers nothing on port 8000, booted with `CONCLAVE_DATA_DIR` at that temp directory and a spare
+`PORT`. `GET /health` returned `{ "status": "running", "error": null }` with
+`[Supervisor] DanyAPI container is up (docker compose ps); warming up.` in the log — where the code as
+first landed would have said `failed`. The same boot also shows **one**
+`Starting DanyAPI container via docker compose...` line, which is W4's half of the same boot. The staged
+container and network were removed afterwards, and `orchestrator/data/` stayed absent.
+`bun test` from `orchestrator/` exits 0 with 44 cases.
+
 ### C4 — MCP tool arguments are never validated against the advertised schema **[K2]**
 
 **Finding.** Every tool publishes an `inputSchema`; not one call site reads it. Unknown or misspelled
@@ -602,6 +637,37 @@ or attach a `.catch` that records the failure.
 
 **How to test it worked.** Force `startAll` to reject (make `docker info` throw synchronously) and assert
 the failure appears in the log with the service name.
+
+**Fix.** *(2026-10-15.)* `orchestrator/src/index.ts` now reads
+`supervisor.startAll().catch((err: any) => console.warn(\`[Supervisor] Service startup failed: ${err?.message || err}\`))`.
+**The proposed `await` was rejected deliberately**, and the reason is this page's own P3: the module is
+top-level-await and `Bun.serve` is created further down the same file, so awaiting `startAll()` would hold
+the server from listening until every `docker compose up -d` in the loop had finished — a startup-latency
+regression for a defect that was never about serialisation. What was missing was rejection handling, and
+that is what was added; the call stays non-blocking. `startAll`'s loop in
+`orchestrator/src/processes/supervisor.ts` now wraps each `await this.startService(name)` in a
+`try`/`catch` that rethrows as `new Error(\`${name}: ${err?.message || err}\`)`, so the handler's line
+names the service — without it the escaping rejection carried no service context at all, and a bare
+`.catch` could only have printed an anonymous message.
+
+*Verified by disabling the behaviour it guards.* `startAll` cannot reject from the tree as it stands,
+because `startService` contains its own failures, so a one-line
+`if (name === 'DanyAPI') throw new Error('F9 probe: forced rejection');` was inserted at the top of
+`startServiceOnce` and the orchestrator booted with `CONCLAVE_DATA_DIR` at a temp directory and
+`PORT=4899`. **Before** this fix — the boot line restored to the bare `supervisor.startAll();` — the
+rejection surfaced only as Bun's own dump on stderr, `error: DanyAPI: F9 probe: forced rejection` under a
+`Bun v1.3.14 (Windows x64)` banner, with no `[Supervisor]` line anywhere. **After** it, stderr carried
+`[Supervisor] Service startup failed: DanyAPI: F9 probe: forced rejection` and no Bun dump, while
+`[Orchestrator] Server listening on http://127.0.0.1:4899` still appeared on stdout — the failure
+recorded **and** the server listening, which is exactly the trade this fix makes against the proposed
+`await`. The throw was then removed and the boot re-run unchanged; `bun test` from `orchestrator/` exits
+**0**, 44 cases across 7 files.
+
+*One correction to this item's "How to test it worked".* Making the docker binary unresolvable does not
+reach the handler: `spawnSync` reports a missing executable through `error`, with `status: null`, and
+`isDockerRunning` already treats anything but `0` as "not running" and returns `false` rather than
+throwing — so a PATH mutation exercises the Docker-Desktop warning path, not the rejection. The forced
+throw is the mutation that works.
 
 ### F10 — The already-fixed pattern still reports one failure at the wrong severity **[K1]**
 

@@ -220,7 +220,7 @@ nothing.
 read `plugin.json`, then move it to `plugins/<manifest.id>`), or refuse a manifest whose `id` differs from
 the slug.
 
-### W4 — `docker compose up -d` can run twice on one boot
+### W4 — `docker compose up -d` can run twice on one boot — **done 2026-10-15**
 
 **Both ends.** *Caller one:* `supervisor.startAll()` in `orchestrator/src/index.ts`, which loops
 `await this.startService(name)` over the service map, and is **not awaited** (hardening F9). *Caller two:*
@@ -243,6 +243,71 @@ serialises the race), and have the `docker` branch of `startPlugin` read
 `supervisor.getStatus().find((s) => s.name === service)?.status` first and only delegate when it is not
 already running.
 
+**Fix.** *(2026-10-15.)* The guard was placed where the resource is acquired, in
+`orchestrator/src/processes/supervisor.ts`, so every caller is safe and not only the two that exist
+today. `startService` is now a thin wrapper that funnels through a per-service in-flight map
+(`private inFlight: Map<string, Promise<void>>`, the same file) and `dedupeInFlight` in the new
+`orchestrator/src/processes/inflight.ts`; the body it used to hold moved unchanged to
+`private async startServiceOnce(name)` and the wrapper is what a second caller reaches. A second caller
+for a name already in flight receives the **first call's promise** and awaits it, so it never issues its
+own `docker compose up -d`; the entry is cleared once that promise settles, including on failure, so a
+later caller can still retry a service that failed rather than being served a cached rejection. The
+`running` check the finding asked for went in at the top of `startServiceOnce`, after the
+`isDeepSeekEnabled()` gate: an already-verified service is satisfied without a re-issue. `stopAll`,
+`getStatus` and `recordState` are untouched, and C3's two behaviours survive exactly — the early
+`failed` return when `up` exits non-zero and `isContainerUp` reports nothing, and the `isContainerUp`
+check on the timeout branch.
+
+*Why a separate module for the helper.* `supervisor.ts` imports `../db`, so any test that imported it
+would create `orchestrator/data/conclave.db`; `inflight.ts` imports nothing, which is what makes the
+normalisation testable. `orchestrator/tests/inflight.test.ts` adds five cases — concurrent calls share
+one factory invocation, a settled entry lets the next call retry, distinct keys do not couple, a
+rejection reaches every caller and clears the entry, and a factory that throws synchronously does not
+cache a poisoned entry. That last case failed on the first draft, which had the cleanup as a `finally`
+inside the wrapper: a synchronously-throwing factory rejects *before* the map entry is written, so the
+`finally` cleared a key that had not been set and the rejection was cached forever. The cleanup is now
+attached to the settled promise instead.
+
+*Deliberate deviation from the proposed fix.* **The page's `await supervisor.startAll()` was rejected.**
+It would serialise the race, but it also holds `Bun.serve` from listening until every `docker compose`
+invocation in the loop has finished — the module is top-level-await and the server is created further
+down the same file — which is a startup-latency regression against hardening **P3**. Serialising was never
+the requirement: the guard has to live at the resource, and it does. The `startPlugin` clause of the
+proposed fix was also not taken as written — no status read was added to
+`orchestrator/src/plugins/index.ts`, which still simply delegates to `supervisor.startService(service)`
+— because a status check at the caller solves nothing for a third caller and a status check alone is
+exactly what the finding says is insufficient. F9's fix does land in the same change, as a rejection
+handler rather than an await.
+
+*Verified by execution, not by unit test alone.* The numbers are **two `docker compose up -d`
+invocations before the guard, one after it**, on the same fixture. A
+`CONCLAVE_DATA_DIR` pointing at a temp directory was used so no probe could create the repository
+database — `Test-Path orchestrator/data` was `False` after every run — with the stub
+`<temp>/DanyAPI/docker-compose.yml` defining one `alpine:3.20` service running `sleep 300`, so the port
+on 8000 stays dead, both callers reach `startDockerService`, and the invocation count is the whole
+signal. Each boot: `Start-Process bun -ArgumentList 'src/index.ts' -WorkingDirectory orchestrator` with
+`CONCLAVE_DATA_DIR` and `PORT=4899` set, 24-28 s, then `Stop-Process`, then
+`Select-String -Path <stdout> -Pattern 'Starting DanyAPI container via docker compose'`. Pre-fix the
+matching line appeared twice, one line apart, with the second invocation recreating the container under
+the first caller's health poll — the first caller then logged
+`DanyAPI did not become healthy and the daemon reports no running container` on stderr while the plugin
+reported `[Plugins] 'danyapi' docker service 'DanyAPI': running`. Post-fix the line appears once and the
+plugin's own call returns without a second compose line. The "before" run reproduced the pre-fix call
+shape by temporarily replacing the wrapper body with `return this.startServiceOnce(name);` and restoring
+it afterwards; nothing was committed and no `git` state was changed.
+
+*One observation this page does not own.* In this environment `isContainerUp` still reports "no running
+container" for a container that is up, so the boot ends with `DanyAPI ... failed` even after the guard.
+The cause is not this finding's and not the guard's: on **Bun 1.3.14**, `spawnSync(..., { timeout: N })`
+returns `status: null` with `error.code === 'ETIMEDOUT'` after about 5 ms whenever the process has
+already been idle in async work for **at least N ms** before the call. `startDockerService` polls for
+10 s and then calls `isContainerUp`, whose own `spawnSync` timeout is 10000 ms, so the daemon question
+misfires precisely there; measured with `bun` directly, a 5 s awaited gap then `spawnSync(..., 10000)`
+takes 122 ms and succeeds, an 11 s gap takes 5 ms and reports `ETIMEDOUT`, and the identical 11 s gap
+with `timeout: 30000` succeeds. That makes C3's honest-status check unreliable on this Bun version. It
+was left alone: this item's brief protects C3's behaviour, and the fix belongs to the Bun/stdlib
+question rather than here.
+
 ### W5 — The bootstrap log line names a database path that is usually not the one written
 
 **Both ends.** *The claim:* `console.log('[Bootstrap] SQLite database initialized at
@@ -259,7 +324,25 @@ that does not exist.
 **Proposed fix.** Log `DB_PATH` (or `DATA_DIR`) from the module that owns it, rather than a second
 hardcoded copy of the path; `runBootstrap` already imports from `../db`.
 
-### W6 — The client's fallback project id names a project the server never seeds
+### W6 — The client invents a project id instead of waiting for the server's — **done 2026-10-15**
+
+> **Correction, 2026-10-15 — the finding as first written was wrong, and its proposed fix would have
+> introduced a bug.** This section claimed the seed creates `'111'` and that the client's `'112'` was a
+> *different* value, so a conversation was stamped with a project the server never made. **The seed
+> creates `'112'`, the same value.** Base58's digit `0` is `'1'`, but the *value* 1 is `B58[1] === '2'`,
+> so `encodeB58(1, 3)` is `112` — the padding rule was read as if the sequence number were the digits.
+> Confirmed twice by execution, not by reading: `encodeB58(1, 3) === '112'`, and a real `initDatabase()`
+> against a fresh temporary `CONCLAVE_DATA_DIR` returned `{"id":"112","name":"Discussions"}` with
+> `counters: [{name:"project",value:1}]`. `ARCHITECTURE.md:474` had `→ "112"` all along.
+> **Consequences for the three paragraphs below:** "What the user sees when it fires" did not fire — the
+> fabricated id resolved to the seeded project; the last sentence of that paragraph has the comparison
+> backwards, because `'1112'` is a four-character **tab** id and not a project id at all; and the
+> **Proposed fix is wrong** — falling back to `'111'` would have replaced a correct literal with an id
+> no server ever creates. What survived is the real defect underneath: the client **fabricates** a
+> server-owned identifier from nothing, which is harmless only while the fabrication happens to match,
+> and would have broken the day the seed changed. That is what the Fix below removes. The general
+> lesson, which is the reason to keep this on the page rather than quietly deleting it: **an id derived
+> by reading an encoder is not an id that has been observed**, and the check was two lines of code.
 
 **Both ends.** *Client literal:* `const projectId = proj ? proj.id : (this.serverProjects[0]?.id || '112')`
 in `createConversation`, and the same `this.serverProjects[0]?.id || '112'` in the branch of
@@ -274,6 +357,39 @@ fallback in the overlay is the one that *does* match; this one is a stale second
 
 **Proposed fix.** Fall back to `'111'`, the project the seed actually creates, rather than to the next
 sequence number in the same shape.
+
+**Fix.** *(2026-10-15.)* Both literals were removed from
+`client/web/src/lib/stores/harness.svelte.ts` and the two sites now resolve only real server ids:
+`createConversation` uses `proj?.id ?? this.serverProjects[0]?.id`, and the fabricating branch of
+`handleTabDetail` uses `this.serverProjects[0]?.id`. With neither known the field is left `undefined`, and
+the server supplies the real project — its `TAB_CREATE` case already reads
+`payload.projectId || defaultProj?.id` (`orchestrator/src/index.ts:441`), so the creating site needed no
+new mechanism, exactly as the audit anticipated. **The proposed fix above is wrong, and applying it would
+have been a new bug:** `newProjectId(nextSeq('project'))` yields **`'112'`** on a fresh database, not
+`'111'`. Confirmed by execution twice rather than by reading — `encodeB58(1, 3)` prints `112`
+(`encodeB58(2, 3)` → `113`, `encodeB58(1, 4)` → `1112`), and a real boot of `initDatabase()` against a
+fresh temporary `CONCLAVE_DATA_DIR` returned `projects: [{"id":"112","name":"Discussions"}]` with
+`counters: [{"name":"project","value":1},{"name":"tab","value":1}]`. The `'111'` came from reading the
+padding rule as "sequence 1 pads to `111`", but Base58 digit 0 is `'1'` while the *value* 1 is
+`B58[1] === '2'`. This is why no existing client constant was reused either: `'112'` already agreed with
+the seed, so the defect was the *invention*, not the value, and the overlay's `DEFAULT_TAB_ID = '1112'`
+is a four-character *tab* id rather than a three-character project id, so it is not the same constant.
+The two sites differ in purpose — `createConversation` creates a thread and lets the server assign, while
+`handleTabDetail` fetches a tab whose `TAB_DETAIL` payload carries no `project_id` and so can only record
+"unknown" until `initFromServer` fills it from the next settings load — but both end at the same
+`undefined`, because in neither case does the client hold a server identifier. No retry loop, polling or
+waiting state was added, since the file has none and the server's own fallback makes them unnecessary; no
+new constant, helper or state field was introduced, and the runes conventions are untouched.
+
+*Verified* from `client/web`, all exit 0. `bun test` → **15 pass, 0 fail across 3 files** (was 10 pass, 0
+fail across 2); the new `tests/harnessProjectId.test.ts` adds five cases — a `TAB_CREATE` frame carries
+`projectId: undefined` rather than `'112'` when the list has not arrived, the offline and tab-detail paths
+leave `project_id` unset, a populated list supplies `'112'`, and a group naming a server project still
+resolves to that project's real id. `bun run check` → `svelte-check found 0 errors and 6 warnings in 5
+files`, exit 0, identical to the pre-change run. `bun run build` → exit 0. **Not done:** `orchestrator/`
+was not touched, and neither was `client/web/src/routes/overlay/+page.svelte` — the former needs no change
+because its `TAB_CREATE` fallback is already the correct behaviour, and the latter's `'1112'` is correct
+as it stands.
 
 ### W7 — The checked-in DanyAPI plugin files are a second source of truth that nothing reads
 

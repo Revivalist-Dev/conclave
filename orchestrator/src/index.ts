@@ -20,7 +20,13 @@ console.log('[Orchestrator] Conclave Orchestrator starting...');
 console.log('-----------------------------------------------------');
 
 const bootstrap = await runBootstrap();
-supervisor.startAll();
+// Not awaited on purpose: startAll() drives `docker compose up -d` and can take
+// seconds, and awaiting it here would hold Bun.serve below from listening — a
+// startup-latency regression. The promise must still not float, so its rejection
+// is handled rather than serialised.
+supervisor.startAll().catch((err: any) => {
+	console.warn(`[Supervisor] Service startup failed: ${err?.message || err}`);
+});
 pluginManager.restore().catch((e) => console.warn('[Plugins] Restore failed:', e));
 
 // Plugin-generated threads (e.g. DanyAPI ask_* MCP threads) announce themselves
