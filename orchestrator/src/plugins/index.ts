@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { pathToFileURL } from 'node:url';
 import { DATA_DIR, db, repos } from '../db';
+import { resolveEndpoint } from '../providers/endpoint';
 import { supervisor } from '../processes/supervisor';
 import { pluginBus } from './bus';
 import { BUILTIN_PLUGINS } from './builtin';
@@ -543,6 +544,7 @@ class PluginManager {
 	private scaffoldContext(manifest: PluginManifest) {
 		return {
 			setting: (key: string, fallback = '') => repos.getSetting(key) ?? fallback,
+			providerEndpoint: () => resolveEndpoint(repos.getSetting('deepseek_endpoint')),
 			getOrCreateThread: (name: string) => {
 				const existing = (repos.getAllTabs() as any[]).find((t) => t.name.toLowerCase() === name.toLowerCase());
 				if (existing) return existing;

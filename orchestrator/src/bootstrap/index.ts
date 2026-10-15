@@ -2,6 +2,7 @@ import { spawnSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { initDatabase, repos, DATA_DIR } from '../db';
+import { DEFAULT_PROVIDER_ENDPOINT } from '../providers/endpoint';
 import { assessDanyApi } from './ready';
 
 export interface BootstrapResult {
@@ -121,9 +122,15 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 	}
 
 	repos.setSetting('bootstrap_last_run', Date.now().toString());
-	repos.setSetting('deepseek_enabled', 'true');
-	repos.setSetting('deepseek_endpoint', 'http://127.0.0.1:8000/v1');
-	repos.setSetting('danyapi_port', '8000');
+	// Seed-only, not assign: these three are user-facing configuration, and
+	// writing them unconditionally on every boot resets a choice the user made
+	// — a custom endpoint could not survive a restart, which made W1's per-call
+	// read pointless, and `deepseek_enabled` could never be turned off. A fresh
+	// database is already seeded by db/index.ts; this covers one that predates
+	// the key.
+	if (!repos.getSetting('deepseek_enabled')) repos.setSetting('deepseek_enabled', 'true');
+	if (!repos.getSetting('deepseek_endpoint')) repos.setSetting('deepseek_endpoint', DEFAULT_PROVIDER_ENDPOINT);
+	if (!repos.getSetting('danyapi_port')) repos.setSetting('danyapi_port', '8000');
 
 	console.log('[Bootstrap] Sequence completed successfully.');
 

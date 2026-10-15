@@ -3,6 +3,7 @@ import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { newProjectId, newTabId, newMessageId, newToolStepId } from './helper';
 import { SCHEMA_SQL } from './schema';
+import { DEFAULT_PROVIDER_ENDPOINT, resolveEndpoint } from '../providers/endpoint';
 
 // CONCLAVE_DATA_DIR is set by the Tauri sidecar loader in production so the
 // database lives in the OS app-data dir; dev falls back to the repo data dir
@@ -68,7 +69,7 @@ export function initDatabase() {
 		insertSetting.run('max_tokens', '4096', now);
 		insertSetting.run('active_provider', 'deepseek', now);
 		insertSetting.run('deepseek_enabled', 'true', now);
-		insertSetting.run('deepseek_endpoint', 'http://127.0.0.1:8000/v1', now);
+		insertSetting.run('deepseek_endpoint', DEFAULT_PROVIDER_ENDPOINT, now);
 		insertSetting.run('deepseek_model', 'deepseek-v4-flash', now);
 		insertSetting.run('mcp_enabled', 'true', now);
 		insertSetting.run('danyapi_port', '8000', now);
@@ -251,7 +252,7 @@ export const repos = {
 		return true;
 	},
 	getDeepSeekConfig: () => {
-		const endpoint = (db.query("SELECT value FROM settings WHERE key = 'deepseek_endpoint'").get() as any)?.value || 'http://127.0.0.1:8000/v1';
+		const endpoint = resolveEndpoint((db.query("SELECT value FROM settings WHERE key = 'deepseek_endpoint'").get() as any)?.value);
 		const model = (db.query("SELECT value FROM settings WHERE key = 'deepseek_model'").get() as any)?.value || 'deepseek-v4-flash';
 		return { endpoint, model };
 	}

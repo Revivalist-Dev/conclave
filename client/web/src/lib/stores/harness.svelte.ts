@@ -555,6 +555,21 @@ class HarnessStore {
 		}
 	}
 
+	/**
+	 * Broadcast handler: another window created a project (`PROJECT_CREATED`).
+	 * Upserts into `serverProjects` (which the sidebar derives from) and keeps
+	 * the `projects` name list in sync, so no reload is needed (W2).
+	 */
+	handleProjectCreated(project: any) {
+		if (!project || !project.id) return;
+		// Reassign rather than mutate so the sidebar's derived project list refreshes.
+		this.serverProjects = this.serverProjects.some((p) => p.id === project.id)
+			? this.serverProjects.map((p) => (p.id === project.id ? { ...p, ...project } : p))
+			: [...this.serverProjects, project];
+		// Mirror `initFromServer`: the name list tracks the server's projects.
+		this.projects = this.serverProjects.map((p) => p.name);
+	}
+
 	handleTabDetail(tabId: string, messages: any[]) {
 		if (!tabId || !Array.isArray(messages)) return;
 		let conv = this.conversations.find((c) => c.id === tabId);

@@ -26,7 +26,9 @@ finding here also corrects a claim on that page, it says so.
 Everything below was read out of the working tree on **2026-10-15** with `rg` at
 `$env:CURSOR_RIPGREP_PATH --hidden`, plus targeted `Read`s. Nothing was executed: no container was
 started, no orchestrator was booted, no `bun test` was run. Where a verdict depends on a remote surface it
-is marked as a read of the recorded evidence rather than an observed response.
+is marked as a read of the recorded evidence rather than an observed response. The W1 **Fix** below was
+verified afterwards by execution — a live stub endpoint and a real orchestrator boot — and that paragraph,
+not this one, is the record of it.
 
 **Nine boundary groups were walked: the seven requested, plus two more of the same shape** (the
 client/web ↔ client/tauri Tauri command and event seam, and the two MCP stdio bridges ↔ `/mcp`). The
@@ -50,7 +52,7 @@ Everything in this table was **found agreeing**, and is listed so the coverage c
 | 3+ | Tauri commands | 11 invoke names: `get_window_state`, `save_window_state`, `exit_app`, `enter_overlay_mode`, `exit_overlay_mode`, `sync_overlay_bounds`, `set_window_always_on_top`, `set_overlay_size`, `ws_status`, `ws_send`, `ws_reconnect` | `tauriInvoke(...)` calls in `client/web/src/lib/services/windowManager.ts` and `orchestratorSocket.svelte.ts` against `tauri::generate_handler!` in `client/tauri/src-tauri/src/lib.rs` | all 11 registered, none dangling |
 | 3+ | Tauri events | `orchestrator-message`, `orchestrator-status`, `refresh-active-thread`, `switch-tab` | Rust `app.emit(...)`/`main_win.emit(...)` sites against `listenTauriEvent(...)` sites | agree; `switch-tab` is emitted from JS (`emitTauriEvent` in the overlay page) and listened for in the desktop layout, so it is a JS-to-JS event with both ends present |
 | 3+ | Tauri capability strings | `core:event:allow-emit`, `core:event:allow-listen`, `core:window:allow-*` | `client/tauri/src-tauri/capabilities/default.json` against the `__TAURI__` APIs called in `windowManager.ts` | the emitted and listened events and the window operations used are covered |
-| 4 | orchestrator → DanyAPI routes | `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/files`, `DELETE /v1/sessions/<id>` | `${this.baseUrl}/models`, `/chat/completions`, `/files` in `orchestrator/src/providers/danyapi.ts`; `deleteProviderSession` in `orchestrator/src/providers/sessions.ts`; the literal in the `/api/upload` branch of `index.ts` | the four requested routes are the two recorded as real plus the two recorded as version skew in [DanyAPI review §3](./danyapi-review.md); no fifth route is called |
+| 4 | orchestrator → DanyAPI routes | `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/files`, `DELETE /v1/sessions/<id>` | `/models`, `/chat/completions`, `/files` off the resolved base URL in `orchestrator/src/providers/danyapi.ts`; `deleteProviderSession` in `orchestrator/src/providers/sessions.ts`; the resolved URL in the `/api/upload` branch of `index.ts` | the four requested routes are the two recorded as real plus the two recorded as version skew in [DanyAPI review §3](./danyapi-review.md); no fifth route is called |
 | 4 | orchestrator → DanyAPI body fields | `session_id`, `stream: true`, `stream_options.include_usage` | `requestBody` in `DanyApiProvider.streamChat`, and `{ model, messages, session_id }` in the scaffold, against the fork surface recorded in [DanyAPI review §3](./danyapi-review.md) | agree with the fork as recorded |
 | 5 | plugin manifest keys | `id`, `name`, `type`, `serviceName`, `mcp.scaffold`, `mcp.tools`, `models` | `orchestrator/plugins/danyapi/plugin.json` and `BUILTIN_PLUGINS` in `orchestrator/src/plugins/builtin.ts` against every key read in `PluginManager` (`orchestrator/src/plugins/index.ts`) | every key the DanyAPI manifest declares and the orchestrator needs is read |
 | 6 | database columns | `messages.error`, `tabs.archived` | `CREATE TABLE` in `orchestrator/src/db/schema.ts` and `orchestrator/src/db/schema.sql` against the two `ALTER TABLE` statements in `initDatabase()` (`orchestrator/src/db/index.ts`) | all three agree; `error` is declared in both schema copies and added by the second guarded `ALTER TABLE`, so hardening F3's claim stands |
@@ -65,14 +67,14 @@ Everything in this table was **found agreeing**, and is listed so the coverage c
 Ranked by what a user loses. Each names **both ends with a quoted symbol**, because this project's pages
 have already been burned by line drift ([hardening-upgrades.md](./hardening-upgrades.md), header).
 
-### W1 — The provider address settings are ignored by the chat path
+### W1 — The provider address settings are ignored by the chat path — **done 2026-10-15**
 
-**Both ends.** *Set and read:* `repos.setSetting('deepseek_endpoint', 'http://127.0.0.1:8000/v1')` in
+**Both ends.** *Set and read:* `repos.setSetting('deepseek_endpoint', DEFAULT_PROVIDER_ENDPOINT)` in
 `initDatabase()` and `runBootstrap()`, read back by `repos.getSetting('deepseek_endpoint')` in
-`deleteProviderSessions`, by `ctx.setting('deepseek_endpoint', 'http://127.0.0.1:8000/v1')` in the DanyAPI
-scaffold, and by `getDeepSeekConfig()` in `repos`. *Hardcoded, ignoring it:*
-`private readonly baseUrl = 'http://127.0.0.1:8000/v1'` in `DanyApiProvider`, and
-`fetch('http://127.0.0.1:8000/v1/files', ...)` in the `/api/upload` branch of `orchestrator/src/index.ts`.
+`deleteProviderSessions`, in the DanyAPI scaffold (now through `ctx.providerEndpoint()`), and by
+`getDeepSeekConfig()` in `repos`. *Ignoring it (as found):* a `private readonly baseUrl` field pinned to
+the default in `DanyApiProvider`, and the literal default at the two `fetch` sites of the `/api/upload`
+branch of `orchestrator/src/index.ts` — both now resolved per call; see the **Fix** below.
 
 **What the user sees when it fires.** Editing `deepseek_endpoint` (or `deepseek_model`) is a silent no-op
 for chat, for attachment upload and for the availability probe, and changes only session teardown and the
@@ -87,7 +89,56 @@ returns nothing), so the setting never reached the adapter.
 `repos.getSetting('deepseek_endpoint')` (the same one `deleteProviderSessions` already uses), drop
 `danyapi_port` or read it, and correct the S3 sentence.
 
-### W2 — Three server-to-client WS types have no handler on the client
+**Fix.** *(2026-10-15.)* Added `orchestrator/src/providers/endpoint.ts`, exporting
+`DEFAULT_PROVIDER_ENDPOINT` (`'http://127.0.0.1:8000/v1'`) and a pure `resolveEndpoint(raw)` that trims,
+strips trailing slashes with `.replace(/\/+$/, '')`, and falls back to the default for `null`,
+`undefined`, empty, whitespace-only or slash-only values; it imports nothing, so the normalisation is
+tested without SQLite. All four consumers now use it. `DanyApiProvider` reads
+`resolveEndpoint(repos.getSetting('deepseek_endpoint'))` per call through a private `endpoint()` method —
+its `private readonly baseUrl` field is gone, so `isAvailable`, `uploadFile` and `streamChat` follow the
+setting without a restart, at the cost of one synchronous `SELECT settings` point read per request, which
+is negligible against the network call it precedes. Both `fetch` sites in the `/api/upload` branch of
+`orchestrator/src/index.ts` use one `providerEndpoint` const, so the 404 retry now also targets the
+resolved host. `deleteProviderSessions` calls the resolver instead of its inline
+`String(… || …).replace(…)`. The DanyAPI scaffold reads `ctx.providerEndpoint()`, a new helper in
+`PluginManager.scaffoldContext` (`orchestrator/src/plugins/index.ts`) wrapping the same resolver; the
+checked-in `orchestrator/plugins/danyapi/mcp.js` mirror was updated to match. The duplicated default
+literals in `db/index.ts` (the seed and `getDeepSeekConfig`), `bootstrap/index.ts` and `builtin.ts` were
+replaced by the constant, leaving `endpoint.ts` as the only place the literal appears. *Verified:*
+`bun test` from `orchestrator/` passes **39 cases across 6 files, exit 0** (was 32 across 5);
+`tests/endpoint.test.ts` adds the seven normalisation cases. The wiring was proved by execution, not only
+by unit test: a stub `Bun.serve` received `GET /v1/models` and `POST /v1/chat/completions` from the
+module-level `danyApiProvider` singleton, and `POST /v1/files` from a real `/api/upload` request against a
+booted orchestrator (`CONCLAVE_DATA_DIR` at a temp directory, `PORT=4899`), with the setting pointed at
+the stub — nothing reached `127.0.0.1:8000`. *Deliberate deviations:* the `/api/upload` 404 retry keeps
+its old body difference (it drops `model`; only the endpoint was fixed, and the retry's trigger is C9's);
+*Not
+done:* no write validation (S3), no model-handling change (C9), nothing under `client/`.
+
+**Fix (second half, appended the same day).** The paragraph above first ended by recording that
+`runBootstrap()` still rewrote `deepseek_endpoint` to the default on every boot, calling it a write-path
+defect outside this item's read path. That classification was wrong, and in a way worth stating: **it made
+this fix inert across a restart**, so the read of the setting was correct and the setting itself could not
+hold a value. `orchestrator/src/bootstrap/index.ts` now seeds three settings only when the key is absent —
+`deepseek_enabled`, `deepseek_endpoint` and `danyapi_port` — instead of assigning all three
+unconditionally, which also means `deepseek_enabled` can finally be turned **off**; until this change the
+boot forced it back to `'true'`, so the toggle was decorative. A fresh database was never affected,
+because `db/index.ts` seeds the keys at creation; the unconditional writes only ever clobbered a
+database that already had them, which is every database after its first boot.
+
+Proved by a three-boot probe rather than a unit test, because the behaviour is a property of boot against a
+real database and a test of it would have to boot the whole module anyway. All three boots ran against one
+temporary `CONCLAVE_DATA_DIR`: boot 1 on a fresh directory returned
+`endpoint=http://127.0.0.1:8000/v1 enabled=true`; the rows were then rewritten to
+`http://127.0.0.1:9911/v1` and `false`; **boot 2 returned `endpoint=http://127.0.0.1:9911/v1
+enabled=false`**, where the old code would have reset both; the two rows were then deleted, and boot 3
+returned the defaults again — so the seeding still happens, and `getSetting` does not return a truthy
+phantom for a missing key, which is the trap a guard written as `if (!getSetting(...))` would fall into
+if it did. The pre-change lines are on the record at `HEAD~1`:
+`git show 60db719:orchestrator/src/bootstrap/index.ts` shows `repos.setSetting('deepseek_enabled', 'true')`
+and the hardcoded endpoint assign.
+
+### W2 — Three server-to-client WS types have no handler on the client — **done 2026-10-15**
 
 **Both ends.** *Sent:* `broadcastWs({ type: 'PROJECT_CREATED', project })` from the `PROJECT_CREATE` case,
 `sendWs(ws, { type: 'SETTINGS_UPDATED', settings })` from the `SETTINGS_SET` case, and
@@ -108,6 +159,47 @@ check, which is exactly why these three were missed.
 **Proposed fix.** Add the three cases: `PROJECT_CREATED` → merge into `serverProjects` and `projects`;
 `SETTINGS_UPDATED` → re-run the `initFromSettings` settings branch; `ERROR` → surface `data.message` as a
 toast or into `pluginError` rather than dropping it.
+
+**Fix.** Applied 2026-10-15 in `client/web`. Three cases were added to the single dispatch site,
+`handleMessage`'s `switch (data.type)` in `client/web/src/lib/services/orchestratorSocket.svelte.ts`, and
+one new store method backs the first. `PROJECT_CREATED` calls a new
+`harness.handleProjectCreated(data.project)` (`client/web/src/lib/stores/harness.svelte.ts`), which upserts
+the project into `serverProjects` by `id` and rebuilds the `projects` name list from it — the same shape
+`initFromServer` uses — reassigning both arrays rather than mutating, so the sidebar's `$derived`
+`projectsToDisplay` re-renders the new project without a reload. `SETTINGS_UPDATED` calls
+`harness.initFromSettings({ settings: data.settings })`, the identical path the `SETTINGS_LOADED` case
+already uses for its `settings` payload: because `initFromSettings` ends in
+`initFromServer(data.projects || [], data.tabs || [])` and `initFromServer` guards both arrays behind a
+`length > 0` check, passing only `settings` leaves `serverProjects` and `conversations` untouched while
+the receiving window picks up the changed key — `overlay_response_duration` (the user-visible HUD
+countdown) included. `ERROR` writes `harness.pluginError`. There is no toast or notification mechanism in
+the client (`rg -n "toast|notification" client/web/src` returns nothing) and `pluginError` is its only
+rendered slot for a server-broadcast error message — the one the existing `PLUGIN_ERROR` case already
+uses — so the rejected-message text lands there rather than being dropped; a `console.warn` accompanies
+it. The handler writes only local state and calls no transport, so an `ERROR` cannot provoke another
+`ERROR` from the orchestrator. No new state field, no Svelte 4 store and no reactive write at module scope
+were introduced.
+
+Verification, all run from `client/web`. `bun test` now runs two files — the F1
+`tests/promptDeadline.test.ts` (5 cases) and a new `tests/orchestratorMessageHandlers.test.ts` (5 cases) —
+**10 pass, 0 fail, exit 0**. The new file drives real frames through
+`OrchestratorSocketClient.handleMessage` by stubbing the Svelte runes globals (`$state`, `$derived.by`)
+before a dynamic import, because `bun test` has no Svelte compiler; it asserts that `PROJECT_CREATED`
+upserts and updates an existing project without duplicating it, that `SETTINGS_UPDATED` applies the
+changed key, that `ERROR` reaches `pluginError`, and that an unknown server type leaves state untouched.
+It sits in `tests/` for the same reason as the F1 test: `tsconfig.json` includes `["src", "test", "*"]`,
+so a `*.test.ts` under `src/` would drag `bun:test` into the `svelte-check` gate. `bun run check` →
+`svelte-check found 0 errors and 6 warnings in 5 files`, exit **0**, identical to the pre-change run
+(0 errors, 6 warnings, exit 0); `bun run build` → exit **0**. **Not done:** `orchestrator/` was not
+touched, because the sending end needed no change — `rg -n "PROJECT_CREATED|SETTINGS_UPDATED"
+orchestrator/src client/web/src` shows `broadcastWs`/`sendWs` sending the three types from
+`orchestrator/src/index.ts` (`PROJECT_CREATED` at `:498`/`:502`, `SETTINGS_UPDATED` at `:631`, `ERROR` at
+`:639` and `:643`) and, before this change, no `PROJECT_CREATED` or `SETTINGS_UPDATED` hit anywhere in
+`client/web/src`; no `PROJECT_RENAMED` or `PROJECT_DELETED` handler was added, because the server sends
+neither; and no dedicated toast or global error banner was introduced, so `ERROR` is visible on the
+settings-page banner `PLUGIN_ERROR` uses rather than in a new surface — a dedicated always-visible banner
+is left to a future change. This page carries no mismatch table to tick; the `**done**` marker is placed
+on the section heading, which is the only per-item row this finding has.
 
 ### W3 — A plugin's install directory and its manifest id are allowed to differ
 

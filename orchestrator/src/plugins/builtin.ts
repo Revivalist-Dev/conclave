@@ -44,7 +44,7 @@ export async function call(toolName, args, ctx) {
 
 	const thread = ctx.getOrCreateThread(tabName);
 	const sessionId = String(args?.session_id || thread.id);
-	const endpoint = ctx.setting('deepseek_endpoint', 'http://127.0.0.1:8000/v1');
+	const endpoint = ctx.providerEndpoint();
 
 	ctx.addMessage(thread.id, 'user', question, model);
 

@@ -6,6 +6,7 @@ import { pluginBus } from './plugins/bus';
 import { llmRouter } from './router';
 import { repos, db } from './db';
 import { getAllAvailableModels } from './providers';
+import { resolveEndpoint } from './providers/endpoint';
 import { deleteProviderSession } from './providers/sessions';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -48,8 +49,7 @@ function deleteProviderSessions(tabId: string): void {
 	const endpoints: string[] = [];
 	try {
 		if (repos.isDeepSeekEnabled()) {
-			const endpoint = String(repos.getSetting('deepseek_endpoint') || 'http://127.0.0.1:8000/v1').replace(/\/+$/, '');
-			endpoints.push(endpoint);
+			endpoints.push(resolveEndpoint(repos.getSetting('deepseek_endpoint')));
 		}
 	} catch {}
 
@@ -264,6 +264,10 @@ const server = Bun.serve<{ id: string }>({
 				const sessionId = (formData.get('session_id') as string) || (formData.get('chatId') as string) || `chat-${Date.now()}`;
 				const model = (formData.get('model') as string) || 'default';
 
+				// The same resolved endpoint the chat adapter and the MCP scaffold
+				// use; read once per upload request rather than captured at boot.
+				const providerEndpoint = resolveEndpoint(repos.getSetting('deepseek_endpoint'));
+
 				// 1. Save files to sandbox_api/data
 				const dataDir = process.env.CONCLAVE_DATA_DIR
 					? join(process.env.CONCLAVE_DATA_DIR, 'attachments')
@@ -280,7 +284,7 @@ const server = Bun.serve<{ id: string }>({
 					writeFileSync(savedPath, Buffer.from(arrayBuffer));
 					console.log(`[Upload] Saved file ${sanitizedName} to ${savedPath}`);
 
-					// 2. Forward to DanyAPI http://127.0.0.1:8000/v1/files
+					// 2. Forward to the configured DanyAPI endpoint
 					let danyApiResponse = null;
 					let danyError: string | null = null;
 					try {
@@ -292,7 +296,7 @@ const server = Bun.serve<{ id: string }>({
 						const effectiveModel = rawModel.includes('qwen') ? rawModel : 'default';
 						danyFormData.append('model', effectiveModel);
 
-						let danyRes = await fetch('http://127.0.0.1:8000/v1/files', {
+						let danyRes = await fetch(`${providerEndpoint}/files`, {
 							method: 'POST',
 							body: danyFormData
 						});
@@ -301,7 +305,7 @@ const server = Bun.serve<{ id: string }>({
 							const fallbackFormData = new FormData();
 							fallbackFormData.append('file', blob, sanitizedName);
 							fallbackFormData.append('session_id', sessionId);
-							danyRes = await fetch('http://127.0.0.1:8000/v1/files', {
+							danyRes = await fetch(`${providerEndpoint}/files`, {
 								method: 'POST',
 								body: fallbackFormData
 							});

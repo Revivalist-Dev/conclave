@@ -159,6 +159,21 @@ class OrchestratorSocketClient {
 					break;
 				}
 
+				case 'PROJECT_CREATED': {
+					// W2: another window created a project; upsert it so it appears
+					// here without a reload.
+					harness.handleProjectCreated(data.project);
+					break;
+				}
+
+				case 'SETTINGS_UPDATED': {
+					// W2: another window persisted a setting (SETTINGS_SET). Re-apply
+					// through the same path SETTINGS_LOADED uses, so this window sees
+					// the change (e.g. the HUD response duration) without a reload.
+					harness.initFromSettings({ settings: data.settings });
+					break;
+				}
+
 				case 'TAB_CREATED': {
 					harness.handleTabCreated(data.tab);
 					break;
@@ -203,6 +218,17 @@ class OrchestratorSocketClient {
 
 				case 'PLUGIN_ERROR': {
 					harness.pluginError = data.error || 'Unknown plugin error';
+					break;
+				}
+
+				case 'ERROR': {
+					// W2: the orchestrator rejected a client message (unknown type, or a
+					// handler throw) and answered with ERROR. Surface it on the same
+					// rendered error slot PLUGIN_ERROR uses rather than dropping it. This
+					// only writes local state and sends nothing back, so handling ERROR
+					// cannot provoke another ERROR from the server.
+					console.warn('[OrchestratorBridge] orchestrator error:', data.message);
+					harness.pluginError = data.message || 'Orchestrator error';
 					break;
 				}
 

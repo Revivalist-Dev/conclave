@@ -1,5 +1,6 @@
 import type { ModelDescriptor, ProviderAdapter, ProviderChatOptions, ProviderStreamChunk } from './types';
 import { repos } from '../db';
+import { resolveEndpoint } from './endpoint';
 
 export const DANYAPI_MODELS: ModelDescriptor[] = [
 	{ id: 'deepseek-v4-flash', name: 'Deepseek v4', description: 'Fast reasoning & chat' },
@@ -13,11 +14,21 @@ export const DANYAPI_MODELS: ModelDescriptor[] = [
 export class DanyApiProvider implements ProviderAdapter {
 	public readonly name = 'DanyAPI';
 	public readonly models = DANYAPI_MODELS;
-	private readonly baseUrl = 'http://127.0.0.1:8000/v1';
+
+	/**
+	 * The endpoint is read per call, not captured at construction: this instance
+	 * is a module-level singleton, so a setting change has to be visible without
+	 * a restart. One synchronous SQLite point read per request, against the
+	 * network call that follows it.
+	 */
+	private endpoint(): string {
+		return resolveEndpoint(repos.getSetting('deepseek_endpoint'));
+	}
 
 	public async isAvailable(): Promise<boolean> {
+		const baseUrl = this.endpoint();
 		try {
-			const res = await fetch(`${this.baseUrl}/models`, {
+			const res = await fetch(`${baseUrl}/models`, {
 				method: 'GET',
 				headers: { 'Host': 'localhost' }
 			});
@@ -34,6 +45,7 @@ export class DanyApiProvider implements ProviderAdapter {
 		mimeType = 'application/octet-stream',
 		model?: string
 	): Promise<any> {
+		const baseUrl = this.endpoint();
 		const effectiveModel = model || this.models[0].id;
 
 		const formData = new FormData();
@@ -42,7 +54,7 @@ export class DanyApiProvider implements ProviderAdapter {
 		formData.append('session_id', sessionId);
 		formData.append('model', effectiveModel);
 
-		const res = await fetch(`${this.baseUrl}/files`, {
+		const res = await fetch(`${baseUrl}/files`, {
 			method: 'POST',
 			headers: { 'Host': 'localhost' },
 			body: formData
@@ -58,6 +70,7 @@ export class DanyApiProvider implements ProviderAdapter {
 
 	public async *streamChat(options: ProviderChatOptions): AsyncGenerator<ProviderStreamChunk> {
 		const { message, messages, attachments, model, sessionId, chatId, temperature, maxTokens } = options;
+		const baseUrl = this.endpoint();
 		const effectiveSessionId = sessionId || chatId;
 
 		// 1. Resolve model directly from options or plugin default:
@@ -91,7 +104,7 @@ export class DanyApiProvider implements ProviderAdapter {
 		const timeoutId = setTimeout(() => controller.abort(), 60000);
 
 		try {
-			const res = await fetch(`${this.baseUrl}/chat/completions`, {
+			const res = await fetch(`${baseUrl}/chat/completions`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -173,7 +186,7 @@ export class DanyApiProvider implements ProviderAdapter {
 
 			if (usableChunks === 0 && (discardedLines > 0 || !sawTerminator)) {
 				throw new Error(
-					`DanyAPI stream from ${this.baseUrl}/chat/completions produced no usable chunk ` +
+					`DanyAPI stream from ${baseUrl}/chat/completions produced no usable chunk ` +
 						`(${discardedLines} discarded line(s), ${sawTerminator ? 'terminator received' : 'no terminator'}); the response was empty or truncated`
 				);
 			}
