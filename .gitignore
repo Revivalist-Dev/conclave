@@ -18,9 +18,12 @@ api_sandbox
 
 # svelte / tauri
 target/
-crates/
 build/
 client/tauri/src-tauri/binaries/
+
+# compiled sidecar dev binary (kept in sync by scripts/build-sidecar.ts)
+crates/conclave-mcp/conclave-mcp
+crates/conclave-mcp/conclave-mcp.exe
 .svelte-kit
 
 # Agent / assistant working directories

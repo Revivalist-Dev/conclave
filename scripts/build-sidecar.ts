@@ -31,9 +31,13 @@ function hostTriple(): string {
 }
 
 const triple = process.env.SIDECAR_TRIPLE || hostTriple();
-const orchestratorOutfile = join(outDir, `orchestrator-${triple}`);
-const mcpOutfile = join(outDir, `conclave-mcp-${triple}`);
-const localMcpBin = join(rootDir, 'crates', 'conclave-mcp', 'conclave-mcp');
+// On Windows both `bun build --compile` and `tauri-build` require the `.exe`
+// suffix, and bare `rustc -o <name>` writes the name literally given — so the
+// suffix has to be attached here or the Tauri resource lookup misses the file.
+const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+const orchestratorOutfile = join(outDir, `orchestrator-${triple}${exeSuffix}`);
+const mcpOutfile = join(outDir, `conclave-mcp-${triple}${exeSuffix}`);
+const localMcpBin = join(rootDir, 'crates', 'conclave-mcp', `conclave-mcp${exeSuffix}`);
 
 // 1. Compile orchestrator
 console.log(`[build-sidecar] Compiling orchestrator -> ${orchestratorOutfile}`);
@@ -59,10 +63,19 @@ if (mcpProc.exitCode !== 0) {
 	process.exit(mcpProc.exitCode ?? 1);
 }
 
-// Keep local dev binary in sync
+// Keep local dev binary in sync. This is a convenience copy, not a build
+// product, so a failure warns loudly and the build continues — but it must never
+// be silent, because a swallow here hides a real misconfiguration (a missing
+// directory, a locked file) with no trace at all.
 try {
+	mkdirSync(join(rootDir, 'crates', 'conclave-mcp'), { recursive: true });
 	copyFileSync(mcpOutfile, localMcpBin);
-} catch {}
+	console.log(`[build-sidecar] Synced local dev bridge -> ${localMcpBin}`);
+} catch (e: any) {
+	console.warn(
+		`[build-sidecar] WARNING: could not copy ${mcpOutfile} -> ${localMcpBin}: ${e?.message ?? e}`
+	);
+}
 
 // 3. Best-effort copy to /Applications/Conclave.app if installed
 const appBundleDir = '/Applications/Conclave.app';
