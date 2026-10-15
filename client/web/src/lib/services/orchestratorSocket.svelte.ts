@@ -82,7 +82,7 @@ class OrchestratorSocketClient {
 		const now = Date.now();
 		// Also coordinate across windows via localStorage timestamp
 		const lastAcrossWindows = typeof localStorage !== 'undefined'
-			? parseInt(localStorage.getItem('brainstorm_last_load_settings') || '0', 10)
+			? parseInt(localStorage.getItem('conclave_last_load_settings') || '0', 10)
 			: 0;
 
 		if (!force && (now - this.lastSettingsRequestTime < 2000 || now - lastAcrossWindows < 2000)) {
@@ -92,7 +92,7 @@ class OrchestratorSocketClient {
 		this.lastSettingsRequestTime = now;
 		if (typeof localStorage !== 'undefined') {
 			try {
-				localStorage.setItem('brainstorm_last_load_settings', String(now));
+				localStorage.setItem('conclave_last_load_settings', String(now));
 			} catch {}
 		}
 

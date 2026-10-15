@@ -15,16 +15,16 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 	// 1. Initialize SQLite database
 	try {
 		initDatabase();
-		console.log('[Bootstrap] SQLite database initialized at orchestrator/data/brainstorm.db');
+		console.log('[Bootstrap] SQLite database initialized at orchestrator/data/conclave.db');
 	} catch (err: any) {
 		console.error(`[Bootstrap] SQLite initialization failed: ${err.message}`);
 	}
 
 	// 2. Setup api_sandbox directory (root level: /api_sandbox).
-	// Production runs (BRAINSTORM_DATA_DIR set by the sidecar loader) skip the
+	// Production runs (CONCLAVE_DATA_DIR set by the sidecar loader) skip the
 	// sandbox entirely: DanyAPI is a local Docker dev provider, and a shipped
 	// app must not git-clone repos or write into its read-only bundle.
-	const dataDir = process.env.BRAINSTORM_DATA_DIR;
+	const dataDir = process.env.CONCLAVE_DATA_DIR;
 	let sandboxDir: string;
 	if (dataDir) {
 		sandboxDir = dataDir;

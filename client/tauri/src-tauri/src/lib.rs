@@ -46,9 +46,9 @@ impl Default for AppWindowState {
 
 fn get_config_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
     if let Ok(home) = app.path().home_dir() {
-        return home.join(".brainstorm.json");
+        return home.join(".conclave.json");
     }
-    PathBuf::from(".brainstorm.json")
+    PathBuf::from(".conclave.json")
 }
 
 /// Validate whether coordinates (x, y) land within the visible bounds of any active monitor.

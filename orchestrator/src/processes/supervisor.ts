@@ -19,10 +19,10 @@ export class ServiceSupervisor {
 	private sandboxDir: string;
 
 	constructor() {
-		if (process.env.BRAINSTORM_DATA_DIR) {
+		if (process.env.CONCLAVE_DATA_DIR) {
 			// Production sidecar: no sandbox next to the read-only bundle; the
 			// local Docker provider simply reports as unavailable.
-			this.sandboxDir = process.env.BRAINSTORM_DATA_DIR;
+			this.sandboxDir = process.env.CONCLAVE_DATA_DIR;
 		} else {
 			// Prefer root level sandbox_api or api_sandbox
 			const rootSandboxApi = join(import.meta.dir, '../../../sandbox_api');

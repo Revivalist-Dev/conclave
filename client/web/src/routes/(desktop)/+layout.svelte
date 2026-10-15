@@ -16,7 +16,7 @@
 		refreshDebounceTimer = setTimeout(async () => {
 			const active =
 				targetTabId ||
-				(typeof localStorage !== 'undefined' ? localStorage.getItem('brainstorm_active_tab') : null) ||
+				(typeof localStorage !== 'undefined' ? localStorage.getItem('conclave_active_tab') : null) ||
 				harness.activeConversationId;
 
 			if (active) {
@@ -48,8 +48,8 @@
 
 		// Listen for cross-window localStorage changes (from overlay)
 		const onStorage = (e: StorageEvent) => {
-			if (e.key === 'brainstorm_active_tab' || e.key === 'brainstorm_refresh_ts') {
-				const target = e.key === 'brainstorm_active_tab' ? e.newValue : undefined;
+			if (e.key === 'conclave_active_tab' || e.key === 'conclave_refresh_ts') {
+				const target = e.key === 'conclave_active_tab' ? e.newValue : undefined;
 				refreshActiveThread(target);
 			}
 		};

@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 
 /**
- * brAInstorm MCP Stdio Bridge
+ * Conclave MCP Stdio Bridge
  *
  * Connects standard stdio-based MCP clients (Claude Desktop, Cursor, Zed, Windsurf)
- * to the running brAInstorm orchestrator over HTTP JSON-RPC (http://127.0.0.1:4000/mcp).
+ * to the running Conclave orchestrator over HTTP JSON-RPC (http://127.0.0.1:4000/mcp).
  *
  * Zero external dependencies — works out-of-the-box with Node.js or Bun.
  */
 
 import readline from 'node:readline';
 
-const ORCHESTRATOR_MCP_URL = process.env.BRAINSTORM_MCP_URL || 'http://127.0.0.1:4000/mcp';
+const ORCHESTRATOR_MCP_URL = process.env.CONCLAVE_MCP_URL || 'http://127.0.0.1:4000/mcp';
 
 const rl = readline.createInterface({
 	input: process.stdin,
@@ -58,7 +58,7 @@ rl.on('line', async (line) => {
 			const errResponse = {
 				jsonrpc: '2.0',
 				id: request.id,
-				error: { code: -32000, message: `brAInstorm HTTP ${res.status}: ${errText}` }
+				error: { code: -32000, message: `Conclave HTTP ${res.status}: ${errText}` }
 			};
 			process.stdout.write(JSON.stringify(errResponse) + '\n');
 			return;
@@ -74,7 +74,7 @@ rl.on('line', async (line) => {
 			id: request.id,
 			error: {
 				code: -32000,
-				message: `Cannot connect to brAInstorm orchestrator at ${ORCHESTRATOR_MCP_URL}. Please ensure brAInstorm is running.`
+				message: `Cannot connect to Conclave orchestrator at ${ORCHESTRATOR_MCP_URL}. Please ensure Conclave is running.`
 			}
 		};
 		process.stdout.write(JSON.stringify(errorResponse) + '\n');

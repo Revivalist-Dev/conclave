@@ -34,7 +34,7 @@ export class LightweightMcpServer {
 	private rootDir: string;
 
 	constructor() {
-		this.rootDir = process.env.BRAINSTORM_PROJECT_ROOT || process.cwd();
+		this.rootDir = process.env.CONCLAVE_PROJECT_ROOT || process.cwd();
 		this.registerBuiltinTools();
 	}
 
@@ -106,7 +106,7 @@ export class LightweightMcpServer {
 					result: {
 						protocolVersion: requestedVersion,
 						serverInfo: {
-							name: 'brAInstorm-orchestrator',
+							name: 'conclave-orchestrator',
 							version: '0.1.0'
 						},
 						capabilities: {
@@ -179,12 +179,12 @@ export class LightweightMcpServer {
 					result: {
 						resources: [
 							{
-								uri: 'brainstorm://db/stats',
+								uri: 'conclave://db/stats',
 								name: 'Database Statistics',
 								mimeType: 'application/json'
 							},
 							{
-								uri: 'brainstorm://services/status',
+								uri: 'conclave://services/status',
 								name: 'Managed Services Health',
 								mimeType: 'application/json'
 							}
@@ -196,7 +196,7 @@ export class LightweightMcpServer {
 			case 'resources/read': {
 				if (isNotification) return null;
 				const uri = params?.uri;
-				if (uri === 'brainstorm://db/stats') {
+				if (uri === 'conclave://db/stats') {
 					const tabs = repos.getAllTabs();
 					return {
 						jsonrpc: '2.0',
@@ -212,7 +212,7 @@ export class LightweightMcpServer {
 						}
 					};
 				}
-				if (uri === 'brainstorm://services/status') {
+				if (uri === 'conclave://services/status') {
 					return {
 						jsonrpc: '2.0',
 						id,

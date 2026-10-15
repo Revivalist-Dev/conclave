@@ -142,7 +142,7 @@
 		? 'opacity-100'
 		: '-ml-64 opacity-0 pointer-events-none'}"
 >
-	<!-- Top App Branding: brainstorm-app-icon.png, brAInstorm text, and [+] New Conversation button -->
+	<!-- Top App Branding: conclave-app-icon.png, Conclave text, and [+] New Conversation button -->
 	<div
 		data-tauri-drag-region
 		onmousedown={handleWindowDrag}
@@ -151,8 +151,8 @@
 		<div data-tauri-drag-region class="flex items-center gap-2.5 z-10 select-none pointer-events-none">
 			<img
 				data-tauri-drag-region
-				src="/brainstorm-app-icon.png"
-				alt="brAInstorm"
+				src="/conclave-app-icon.png"
+				alt="Conclave"
 				class="w-[42px] h-[42px] object-cover rounded-xl select-none drop-shadow-md flex-shrink-0"
 			/>
 			<div data-tauri-drag-region class="flex items-center tracking-tight font-bold text-base text-zinc-100 select-none">

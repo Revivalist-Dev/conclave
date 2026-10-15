@@ -1,8 +1,8 @@
 /**
- * Window Management Service for brAInstorm
+ * Window Management Service for Conclave
  * Handles seamless transitions between full desktop chat window
  * and transparent, resizable HUD overlay mode in Tauri v2.
- * Persists window coordinates, size, and mode in ~/.brainstorm.json
+ * Persists window coordinates, size, and mode in ~/.conclave.json
  */
 
 export interface WindowBounds {
@@ -126,10 +126,10 @@ export async function listenTauriEvent(event: string, handler: (payload: any) =>
 }
 
 /**
- * Load window state from ~/.brainstorm.json (via Tauri) with localStorage fallback
+ * Load window state from ~/.conclave.json (via Tauri) with localStorage fallback
  */
 export async function loadWindowState(): Promise<AppWindowState> {
-	// 1. Try Tauri native .brainstorm.json command
+	// 1. Try Tauri native .conclave.json command
 	try {
 		const nativeState = await tauriInvoke<AppWindowState>('get_window_state');
 		if (nativeState && nativeState.mode && nativeState.normal && nativeState.minimalist) {
@@ -143,13 +143,13 @@ export async function loadWindowState(): Promise<AppWindowState> {
 	// 2. Browser fallback via localStorage
 	if (typeof localStorage !== 'undefined') {
 		try {
-			const savedMode = localStorage.getItem('brainstorm_window_mode');
+			const savedMode = localStorage.getItem('conclave_window_mode');
 			if (savedMode === 'minimalist' || savedMode === 'normal') {
 				cachedState.mode = savedMode;
 			}
-			const savedFull = localStorage.getItem('brainstorm_full_bounds');
+			const savedFull = localStorage.getItem('conclave_full_bounds');
 			if (savedFull) cachedState.normal = JSON.parse(savedFull);
-			const savedHud = localStorage.getItem('brainstorm_hud_bounds');
+			const savedHud = localStorage.getItem('conclave_hud_bounds');
 			if (savedHud) cachedState.minimalist = JSON.parse(savedHud);
 		} catch {}
 	}
@@ -158,7 +158,7 @@ export async function loadWindowState(): Promise<AppWindowState> {
 }
 
 /**
- * Save window state to ~/.brainstorm.json and localStorage
+ * Save window state to ~/.conclave.json and localStorage
  */
 export async function saveWindowState(state: AppWindowState): Promise<void> {
 	cachedState = { ...state };
@@ -166,13 +166,13 @@ export async function saveWindowState(state: AppWindowState): Promise<void> {
 	// 1. Persist to localStorage
 	if (typeof localStorage !== 'undefined') {
 		try {
-			localStorage.setItem('brainstorm_window_mode', state.mode);
-			localStorage.setItem('brainstorm_full_bounds', JSON.stringify(state.normal));
-			localStorage.setItem('brainstorm_hud_bounds', JSON.stringify(state.minimalist));
+			localStorage.setItem('conclave_window_mode', state.mode);
+			localStorage.setItem('conclave_full_bounds', JSON.stringify(state.normal));
+			localStorage.setItem('conclave_hud_bounds', JSON.stringify(state.minimalist));
 		} catch {}
 	}
 
-	// 2. Persist to ~/.brainstorm.json via native Tauri command
+	// 2. Persist to ~/.conclave.json via native Tauri command
 	await tauriInvoke('save_window_state', { state });
 }
 

@@ -5,7 +5,7 @@
 </script>
 
 <svelte:head>
-	<title>brAInstorm — LLM UI</title>
+	<title>Conclave — LLM UI</title>
 </svelte:head>
 
 {@render children()}

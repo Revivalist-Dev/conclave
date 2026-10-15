@@ -96,7 +96,7 @@ class McpStdioClient {
 			{
 				protocolVersion: '2024-11-05',
 				capabilities: {},
-				clientInfo: { name: 'brAInstorm-orchestrator', version: '0.1.0' }
+				clientInfo: { name: 'conclave-orchestrator', version: '0.1.0' }
 			},
 			15000
 		);

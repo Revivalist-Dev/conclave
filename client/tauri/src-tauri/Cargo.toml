@@ -1,8 +1,8 @@
 [package]
 name = "tauriclient"
 version = "0.1.0"
-description = "brAInstorm Desktop LLM Harness"
-authors = ["brAInstorm"]
+description = "Conclave Desktop LLM Harness"
+authors = ["Conclave"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

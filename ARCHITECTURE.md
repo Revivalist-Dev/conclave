@@ -1,6 +1,6 @@
-# Architecture: brAInstorm
+# Architecture: Conclave
 
-**brAInstorm** is a modular, high-performance, and lightweight local AI agentic coding and chat harness. It couples a native desktop shell (Tauri v2) with a reactive SvelteKit 5 web frontend, a centralized Bun/TypeScript orchestrator with native SQLite persistence, and containerized local LLM backends (DanyAPI on Docker).
+**Conclave** is a modular, high-performance, and lightweight local AI agentic coding and chat harness. It couples a native desktop shell (Tauri v2) with a reactive SvelteKit 5 web frontend, a centralized Bun/TypeScript orchestrator with native SQLite persistence, and containerized local LLM backends (DanyAPI on Docker).
 
 The system is designed with strict separation of concerns, zero host script pollution, native multi-turn session continuation, and an edge-to-edge frameless user interface.
 
@@ -84,11 +84,11 @@ The system is designed with strict separation of concerns, zero host script poll
 ## 2. Directory Structure
 
 ```
-brAInstorm/
+Conclave/
 ├── assets/                      # Master application icons and brand graphics
-│   ├── brainstorm-app-icon.png  # 1024x1024 master icon
-│   ├── brainstorm-app-icon.icns # macOS native icon bundle
-│   └── brainstorm-app-icon.ico  # Windows multi-resolution icon
+│   ├── conclave-app-icon.png  # 1024x1024 master icon
+│   ├── conclave-app-icon.icns # macOS native icon bundle
+│   └── conclave-app-icon.ico  # Windows multi-resolution icon
 │
 ├── client/
 │   ├── web/                     # SvelteKit 5 chat UI harness (Tailwind CSS, runes store)
@@ -139,7 +139,7 @@ brAInstorm/
 │   │   ├── providers/           # Modular API adapters (DanyAPI, DeepSeek, LocalMock)
 │   │   └── router/              # LLM provider routing & dispatcher
 │   ├── data/
-│   │   └── brainstorm.db        # SQLite database file (WAL mode)
+│   │   └── conclave.db        # SQLite database file (WAL mode)
 │   └── package.json
 │
 ├── docs/                        # Project documentation & guides
@@ -291,7 +291,7 @@ PROMPT_SEND { tabId: "1112", content: "..." }
 
 ## 5. Multimodal File Staging & Multi-Attachment Pipeline
 
-brAInstorm supports attaching single or multiple images, text files, and documents directly to chat sessions.
+Conclave supports attaching single or multiple images, text files, and documents directly to chat sessions.
 
 ```
 [User Selects or Drops File in PromptInput]
@@ -370,7 +370,7 @@ brAInstorm supports attaching single or multiple images, text files, and documen
 
 ## 7. Storage Specification: SQLite (`bun:sqlite`)
 
-The database file resides at `orchestrator/data/brainstorm.db`.
+The database file resides at `orchestrator/data/conclave.db`.
 
 ### 7.1 Schema
 
@@ -619,7 +619,7 @@ All endpoints validate the `Origin` header against local authorized origins (`ta
 
 ## 10. Security Architecture & Sandboxing
 
-brAInstorm enforces defense-in-depth isolation across browser vectors, process execution, and the filesystem:
+Conclave enforces defense-in-depth isolation across browser vectors, process execution, and the filesystem:
 
 ### 10.1 Origin Validation & Dynamic CORS
 - **Threat Vector**: Malicious web pages visited in regular browsers could perform CSRF or DNS rebinding against `http://127.0.0.1:4000/mcp` to execute arbitrary commands.
@@ -632,7 +632,7 @@ brAInstorm enforces defense-in-depth isolation across browser vectors, process e
 ### 10.2 MCP Tool Filesystem Containment
 - **Threat Vector**: Relative path parameters (`../../etc/passwd`) escaping into host filesystem.
 - **Protection**:
-  - Workspace root is anchored to `process.env.BRAINSTORM_PROJECT_ROOT || process.cwd()`.
+  - Workspace root is anchored to `process.env.CONCLAVE_PROJECT_ROOT || process.cwd()`.
   - In `read_file` and `write_file`, all paths are normalized via `resolve(this.rootDir, path)` and checked with `.startsWith(this.rootDir)`. Unsafe paths return permission errors.
   - In `run_command`, execution directory `cwd` is validated to ensure it cannot escape outside `this.rootDir`.
   - Process stdout and stderr are captured with a 10MB `maxBuffer` to prevent truncated diagnostics.
@@ -667,7 +667,7 @@ brAInstorm enforces defense-in-depth isolation across browser vectors, process e
 
 ## 13. Window Management, Multi-Monitor Safety & macOS Spaces Architecture
 
-brAInstorm utilizes a dual-window model in Tauri v2 coordinated with native macOS AppKit APIs for robust floating HUD operation:
+Conclave utilizes a dual-window model in Tauri v2 coordinated with native macOS AppKit APIs for robust floating HUD operation:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -694,7 +694,7 @@ brAInstorm utilizes a dual-window model in Tauri v2 coordinated with native macO
 │   │    • Off-screen recovery (unplugged monitors fallback)       │     │
 │   │                                                              │     │
 │   │ 3. Native Move Persistence:                                  │     │
-│   │    • WindowEvent::Moved auto-persists to ~/.brainstorm.json  │     │
+│   │    • WindowEvent::Moved auto-persists to ~/.conclave.json  │     │
 │   │                                                              │     │
 │   │ 4. Lifecycle & Dock Reopen:                                  │     │
 │   │    • RunEvent::Reopen unhides main when clicking Dock icon   │     │
@@ -704,17 +704,17 @@ brAInstorm utilizes a dual-window model in Tauri v2 coordinated with native macO
 ```
 
 ### 13.1 Multi-Monitor Clamping & Off-Screen Protection
-* When switching modes (`enter_overlay_mode`, `exit_overlay_mode`) or on app launch, target coordinates `(x, y)` from `~/.brainstorm.json` are validated against `app.available_monitors()`.
+* When switching modes (`enter_overlay_mode`, `exit_overlay_mode`) or on app launch, target coordinates `(x, y)` from `~/.conclave.json` are validated against `app.available_monitors()`.
 * If a target position lands outside all active display viewports (e.g. secondary monitor was unplugged or arrangement changed), the window is clamped safely to the primary monitor (`x: mon_x + 24.0, y: mon_y + 100.0` for overlay).
 
 ### 13.2 macOS Spaces & Fullscreen Integration
 * Regular always-on-top windows in macOS bind strictly to the virtual desktop (Space) where they were opened.
-* On macOS, brAInstorm configures the underlying `NSWindow` via `objc2`:
+* On macOS, Conclave configures the underlying `NSWindow` via `objc2`:
   $$\text{CollectionBehavior} = \text{CanJoinAllSpaces } (1 \ll 0) \mid \text{FullScreenAuxiliary } (1 \ll 8) \mid \text{IgnoresCycle } (1 \ll 6)$$
 * This allows the floating brain HUD to remain visible across all virtual spaces, Mission Control, and fullscreen IDEs/browsers without vanishing.
 
 ### 13.3 Window Move Tracking & Persistence
-* Native `WindowEvent::Moved` events captured in Tauri's event loop automatically update `state.minimalist.x/y` or `state.normal.x/y` and persist them to `~/.brainstorm.json`.
+* Native `WindowEvent::Moved` events captured in Tauri's event loop automatically update `state.minimalist.x/y` or `state.normal.x/y` and persist them to `~/.conclave.json`.
 * Both frontend layouts (`(desktop)/+layout.svelte` and `overlay/+page.svelte`) call `initWindowListeners()` to register window resize and move synchronization.
 
 ### 13.4 Application Lifecycle & Dock Reopen
@@ -726,7 +726,7 @@ brAInstorm utilizes a dual-window model in Tauri v2 coordinated with native macO
   * `exit_overlay_mode(tab_id)` passes `tabId` directly into Rust.
   * Rust native code shows and focuses the main window, then emits `main_win.emit("refresh-active-thread", { tabId })` directly from native code (bypassing webview permissions).
   * The overlay emits Tauri cross-window events (`switch-tab`, `refresh-active-thread`) enabled by explicit `core:event:default`, `core:event:allow-emit`, `core:event:allow-listen` permissions in `capabilities/default.json`.
-  * The overlay updates `brainstorm_active_tab` and timestamp `brainstorm_refresh_ts` in shared `localStorage`.
+  * The overlay updates `conclave_active_tab` and timestamp `conclave_refresh_ts` in shared `localStorage`.
 * **Multi-Event Desktop Triggers**: The main window (`(desktop)/+layout.svelte`) triggers `refreshActiveThread(tabId)` upon:
   1. Native Rust `refresh-active-thread` event
   2. Frontend Tauri `switch-tab` event
@@ -743,7 +743,7 @@ brAInstorm utilizes a dual-window model in Tauri v2 coordinated with native macO
   * `ConversationView` monitors both active conversation ID and message counts, automatically scrolling the conversation container to the bottom so that newly generated overlay messages are immediately in view.
 
 ### 13.6 Single-IPC Sizing, Rigid Idle Geometry & Ambient Ergonomics
-* **Locked Idle Bounds**: The idle minimalist HUD dimensions are rigidly invariant at `200×56` px across Rust and TypeScript. Expanding states (`prompt` at `560×170`, `response` at `560×320`, `error`) never overwrite or drift the idle HUD geometry in `~/.brainstorm.json`.
+* **Locked Idle Bounds**: The idle minimalist HUD dimensions are rigidly invariant at `200×56` px across Rust and TypeScript. Expanding states (`prompt` at `560×170`, `response` at `560×320`, `error`) never overwrite or drift the idle HUD geometry in `~/.conclave.json`.
 * **Widened Prompt Box & Enhanced Legibility**: The prompt input and response cards are widened by 100px (to 560px), with font size elevated to `13.5px` (`text-[13.5px]`), providing comfortable multi-line typing and code reading in floating ambient mode.
 * **Distraction-Free UI**: The LLM model button/badge is excluded from overlay mode to keep the ambient pill focused strictly on the prompt and response stream.
 * **Deduplicated IPC**: Sizing operations route exclusively through the native `set_overlay_size` command, eliminating duplicate `win.setSize()` IPC roundtrips.

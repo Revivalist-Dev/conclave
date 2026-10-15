@@ -32,8 +32,8 @@
 	type McpPathMode = 'app' | 'dev';
 	let mcpPathMode = $state<McpPathMode>('app');
 
-	const PROD_MCP_BIN = '/Applications/brAInstorm.app/Contents/MacOS/brainstorm-mcp';
-	const DEV_MCP_SCRIPT = '/Users/fil/Code/brAInstorm/orchestrator/bin/mcp-server.js';
+	const PROD_MCP_BIN = '/Applications/Conclave.app/Contents/MacOS/conclave-mcp';
+	const DEV_MCP_SCRIPT = '/Users/fil/Code/Conclave/orchestrator/bin/mcp-server.js';
 
 	const activeMcpPath = $derived(mcpPathMode === 'app' ? PROD_MCP_BIN : DEV_MCP_SCRIPT);
 
@@ -45,14 +45,14 @@
 		mcpPathMode === 'app'
 			? {
 					mcpServers: {
-						brainstorm: {
+						conclave: {
 							command: PROD_MCP_BIN
 						}
 					}
 			  }
 			: {
 					mcpServers: {
-						brainstorm: {
+						conclave: {
 							command: 'node',
 							args: [DEV_MCP_SCRIPT]
 						}
@@ -63,7 +63,7 @@
 	const mcpConfigJson = $derived(JSON.stringify(mcpConfigObj, null, 2));
 
 	const mcpLlmPrompt = $derived(
-`Please configure brAInstorm as an MCP server in my MCP settings file:
+`Please configure Conclave as an MCP server in my MCP settings file:
 
 ${mcpConfigJson}`
 	);
@@ -139,7 +139,7 @@ ${mcpConfigJson}`
 </script>
 
 <svelte:head>
-	<title>Settings — brAInstorm</title>
+	<title>Settings — Conclave</title>
 </svelte:head>
 
 <div class="h-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden">
@@ -250,7 +250,7 @@ ${mcpConfigJson}`
 					<div>
 						<h2 class="text-base font-semibold text-zinc-100">Model Context Protocol (MCP) Integration</h2>
 						<p class="text-zinc-400 text-xs">
-							Expose brAInstorm's local LLMs, chat tabs, and filesystem tools to Claude Desktop, Cursor, Zed, and Windsurf.
+							Expose Conclave's local LLMs, chat tabs, and filesystem tools to Claude Desktop, Cursor, Zed, and Windsurf.
 						</p>
 					</div>
 				</div>
@@ -352,7 +352,7 @@ ${mcpConfigJson}`
 				</div>
 
 				<p class="text-[11px] text-zinc-400 leading-relaxed">
-					Add this <code class="text-cyan-300 bg-zinc-800/80 px-1 py-0.5 rounded font-mono">brainstorm</code> server block to your client's MCP configuration file:
+					Add this <code class="text-cyan-300 bg-zinc-800/80 px-1 py-0.5 rounded font-mono">conclave</code> server block to your client's MCP configuration file:
 				</p>
 
 				<div class="relative rounded-xl bg-zinc-950/90 border border-zinc-800 p-3.5 font-mono text-[11px] text-zinc-200 leading-relaxed overflow-x-auto select-all">
@@ -429,7 +429,7 @@ ${mcpConfigJson}`
 							<span class="text-[10px] text-zinc-500 font-mono">Standard MCP Stdio</span>
 						</div>
 						<p class="text-[10px] text-zinc-400 leading-relaxed">
-							Any client supporting the Model Context Protocol stdio specification can run <code class="text-zinc-300 font-mono">{activeRunCommand}</code> directly. All requests are routed to the brAInstorm orchestrator at <code class="text-cyan-300 font-mono">http://127.0.0.1:4000/mcp</code>.
+							Any client supporting the Model Context Protocol stdio specification can run <code class="text-zinc-300 font-mono">{activeRunCommand}</code> directly. All requests are routed to the Conclave orchestrator at <code class="text-cyan-300 font-mono">http://127.0.0.1:4000/mcp</code>.
 						</p>
 					</div>
 				</div>
@@ -810,7 +810,7 @@ ${mcpConfigJson}`
 					</div>
 					<div class="flex justify-between items-center py-1 border-b border-zinc-800/50">
 						<span class="text-zinc-500">SQLite Database:</span>
-						<span class="text-zinc-200">orchestrator/data/brainstorm.db</span>
+						<span class="text-zinc-200">orchestrator/data/conclave.db</span>
 					</div>
 					<div class="flex justify-between items-center py-1">
 						<span class="text-zinc-500">ID Scheme:</span>

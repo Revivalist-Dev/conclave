@@ -105,7 +105,7 @@ class HarnessStore {
 	projects = $state<string[]>(['Discussions']);
 	showNewChatModal = $state<boolean>(false);
 	pendingNewChatGroup = $state<string>('Discussions');
-	lastProjectDirectory = $state<string>(typeof localStorage !== 'undefined' ? localStorage.getItem('brainstorm_last_project_dir') || '' : '');
+	lastProjectDirectory = $state<string>(typeof localStorage !== 'undefined' ? localStorage.getItem('conclave_last_project_dir') || '' : '');
 	selectedLlmProvider = $state<string>('DeepSeek');
 	private inFlightFetches = new Set<string>();
 	private lastTabFetchTime = new Map<string, number>();
@@ -113,7 +113,7 @@ class HarnessStore {
 	// this store and its setActiveModel/applyTabLastModel functions.
 	selectedLlmModel = $state<string>(
 		typeof localStorage !== 'undefined'
-			? localStorage.getItem('brainstorm_active_model') || 'deepseek-v4-flash'
+			? localStorage.getItem('conclave_active_model') || 'deepseek-v4-flash'
 			: 'deepseek-v4-flash'
 	);
 	isGenerating = $state<boolean>(false);
@@ -128,8 +128,8 @@ class HarnessStore {
 		stream: true,
 		routerEndpoint: '/api/chat',
 		overlayResponseDuration:
-			typeof localStorage !== 'undefined' && localStorage.getItem('brainstorm_overlay_duration')
-				? Number(localStorage.getItem('brainstorm_overlay_duration')) || 15
+			typeof localStorage !== 'undefined' && localStorage.getItem('conclave_overlay_duration')
+				? Number(localStorage.getItem('conclave_overlay_duration')) || 15
 				: 15
 	});
 
@@ -220,7 +220,7 @@ class HarnessStore {
 			conv.providerId = this.selectedLlmProvider;
 		}
 		if (typeof localStorage !== 'undefined') {
-			localStorage.setItem('brainstorm_active_model', model);
+			localStorage.setItem('conclave_active_model', model);
 		}
 	}
 
@@ -267,7 +267,7 @@ class HarnessStore {
 		if (!id) return;
 		this.activeConversationId = id;
 		if (typeof localStorage !== 'undefined') {
-			localStorage.setItem('brainstorm_active_tab', id);
+			localStorage.setItem('conclave_active_tab', id);
 		}
 		if (!this.openTabIds.includes(id)) {
 			this.openTabIds.push(id);
@@ -315,7 +315,7 @@ class HarnessStore {
 	async enterMinimalistMode() {
 		this.isMinimalistMode = true;
 		if (this.activeConversationId && typeof localStorage !== 'undefined') {
-			localStorage.setItem('brainstorm_active_tab', this.activeConversationId);
+			localStorage.setItem('conclave_active_tab', this.activeConversationId);
 		}
 		await enterMinimalistWindow();
 	}
@@ -424,7 +424,7 @@ class HarnessStore {
 	setOverlayResponseDuration(seconds: number) {
 		this.settings.overlayResponseDuration = seconds;
 		if (typeof localStorage !== 'undefined') {
-			localStorage.setItem('brainstorm_overlay_duration', String(seconds));
+			localStorage.setItem('conclave_overlay_duration', String(seconds));
 		}
 		this.setSetting('overlay_response_duration', String(seconds));
 	}
@@ -495,7 +495,7 @@ class HarnessStore {
 			}
 
 			// Restore or set active tab (never restore into an archived thread)
-			const savedActive = typeof localStorage !== 'undefined' ? localStorage.getItem('brainstorm_active_tab') : null;
+			const savedActive = typeof localStorage !== 'undefined' ? localStorage.getItem('conclave_active_tab') : null;
 			const target = (savedActive && this.conversations.find((c) => c.id === savedActive && !c.archived))
 				? savedActive
 				: (this.activeConversationId && this.conversations.find((c) => c.id === this.activeConversationId && !c.archived))
@@ -603,7 +603,7 @@ class HarnessStore {
 		const effectiveDir = dir !== undefined ? dir.trim() : this.lastProjectDirectory;
 		if (effectiveDir && typeof localStorage !== 'undefined') {
 			this.lastProjectDirectory = effectiveDir;
-			localStorage.setItem('brainstorm_last_project_dir', effectiveDir);
+			localStorage.setItem('conclave_last_project_dir', effectiveDir);
 		}
 
 		const chosenProvider = providerId || this.selectedLlmProvider || 'DeepSeek';

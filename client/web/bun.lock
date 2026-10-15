@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "brainstorm-harness",
+      "name": "conclave-harness",
       "dependencies": {
         "highlight.js": "^11.12.0",
         "marked": "^18.0.12",

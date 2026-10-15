@@ -13,7 +13,7 @@ const PORT = Number(process.env.PORT) || 4000;
 
 // Execute bootstrap sequence
 console.log('-----------------------------------------------------');
-console.log('[Orchestrator] brAInstorm Orchestrator starting...');
+console.log('[Orchestrator] Conclave Orchestrator starting...');
 console.log('-----------------------------------------------------');
 
 const bootstrap = await runBootstrap();
@@ -263,8 +263,8 @@ const server = Bun.serve<{ id: string }>({
 				const model = (formData.get('model') as string) || 'default';
 
 				// 1. Save files to sandbox_api/data
-				const dataDir = process.env.BRAINSTORM_DATA_DIR
-					? join(process.env.BRAINSTORM_DATA_DIR, 'attachments')
+				const dataDir = process.env.CONCLAVE_DATA_DIR
+					? join(process.env.CONCLAVE_DATA_DIR, 'attachments')
 					: join(import.meta.dir, '../../api_sandbox/data');
 				if (!existsSync(dataDir)) {
 					mkdirSync(dataDir, { recursive: true });
@@ -376,7 +376,7 @@ const server = Bun.serve<{ id: string }>({
 			}
 		}
 
-		return new Response('brAInstorm Orchestrator: Active', {
+		return new Response('Conclave Orchestrator: Active', {
 			headers: getCorsHeaders(req)
 		});
 	},

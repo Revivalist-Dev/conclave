@@ -92,7 +92,7 @@
 
 		// Load custom prompt dimensions if previously saved
 		try {
-			const saved = localStorage.getItem('brainstorm_prompt_dims');
+			const saved = localStorage.getItem('conclave_prompt_dims');
 			if (saved) {
 				const parsed = JSON.parse(saved);
 				if (parsed && parsed.width >= 340 && parsed.height >= 56) {
@@ -126,7 +126,7 @@
 		const onFocus = () => {
 			// Pick up tab switches made in the main window while the HUD was open
 			try {
-				const saved = localStorage.getItem('brainstorm_active_tab');
+				const saved = localStorage.getItem('conclave_active_tab');
 				if (saved && saved !== harness.activeConversationId) harness.selectConversation(saved);
 			} catch {}
 		};
@@ -156,7 +156,7 @@
 					isThinkingInBackground = false;
 					if (data.model) responseModel = data.model;
 					try {
-						localStorage.setItem('brainstorm_refresh_ts', Date.now().toString());
+						localStorage.setItem('conclave_refresh_ts', Date.now().toString());
 					} catch {}
 					showResponseCard();
 				} else if (overlayState === 'idle' || overlayState === 'response') {
@@ -393,8 +393,8 @@
 		const tabToRestore = harness.activeConversationId || null;
 
 		if (tabToRestore && typeof localStorage !== 'undefined') {
-			localStorage.setItem('brainstorm_active_tab', tabToRestore);
-			localStorage.setItem('brainstorm_refresh_ts', Date.now().toString());
+			localStorage.setItem('conclave_active_tab', tabToRestore);
+			localStorage.setItem('conclave_refresh_ts', Date.now().toString());
 		}
 
 		await emitTauriEvent('refresh-active-thread', { tabId: tabToRestore });
@@ -461,8 +461,8 @@
 		const tabToRestore = harness.activeConversationId || null;
 
 		if (tabToRestore && typeof localStorage !== 'undefined') {
-			localStorage.setItem('brainstorm_active_tab', tabToRestore);
-			localStorage.setItem('brainstorm_refresh_ts', Date.now().toString());
+			localStorage.setItem('conclave_active_tab', tabToRestore);
+			localStorage.setItem('conclave_refresh_ts', Date.now().toString());
 		}
 
 		await emitTauriEvent('refresh-active-thread', { tabId: tabToRestore });
@@ -534,7 +534,7 @@
 					height: lastH
 				};
 				try {
-					localStorage.setItem('brainstorm_prompt_dims', JSON.stringify(promptDimensions));
+					localStorage.setItem('conclave_prompt_dims', JSON.stringify(promptDimensions));
 				} catch {}
 			}
 		}
@@ -818,7 +818,7 @@
 							class="menu-item flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-rose-400 hover:text-rose-200 hover:bg-rose-500/15 rounded-lg transition-colors cursor-pointer text-left"
 						>
 							<Power class="w-3.5 h-3.5 text-rose-400" />
-							<span>Quit brAInstorm</span>
+							<span>Quit Conclave</span>
 						</button>
 					</div>
 				{/if}

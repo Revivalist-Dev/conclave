@@ -1,4 +1,4 @@
-//! Side-loads the brAInstorm orchestrator so it boots with the app.
+//! Side-loads the Conclave orchestrator so it boots with the app.
 //! Production (bundled app): expects the bun-compiled sidecar next to the
 //! executable; its database/attachments go to the OS app-data dir.
 //! Dev (`tauri dev`): spawns `bun src/index.ts` from the orchestrator sources,
@@ -43,7 +43,7 @@ fn sidecar_path() -> Option<PathBuf> {
 fn find_orchestrator_dir() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
-    if let Ok(dir) = std::env::var("BRAINSTORM_ORCHESTRATOR_DIR") {
+    if let Ok(dir) = std::env::var("CONCLAVE_ORCHESTRATOR_DIR") {
         candidates.push(PathBuf::from(dir));
     }
     if let Ok(cwd) = std::env::current_dir() {
@@ -69,7 +69,7 @@ fn spawn_child(mut cmd: Command, label: &str, app: &AppHandle, use_app_data_dir:
         if let Ok(data_dir) = app.path().app_data_dir() {
             match std::fs::create_dir_all(&data_dir) {
                 Ok(()) => {
-                    cmd.env("BRAINSTORM_DATA_DIR", &data_dir);
+                    cmd.env("CONCLAVE_DATA_DIR", &data_dir);
                 }
                 Err(e) => eprintln!(
                     "[OrchestratorLoader] Could not create data dir {}: {}",
@@ -111,7 +111,7 @@ pub fn spawn_orchestrator(app: &AppHandle) {
         let Some(dir) = find_orchestrator_dir() else {
             eprintln!(
                 "[OrchestratorLoader] Dev mode: orchestrator sources not found \
-                 (set BRAINSTORM_ORCHESTRATOR_DIR); continuing without it"
+                 (set CONCLAVE_ORCHESTRATOR_DIR); continuing without it"
             );
             return;
         };

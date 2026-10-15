@@ -2,8 +2,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const APP_NAME = 'brAInstorm';
-const APP_SLUG = 'brainstorm';
+const APP_NAME = 'Conclave';
+const APP_SLUG = 'conclave';
 const LEGACY_APP_DATA_DIRS = ['proxima'];
 const SKILL_FILE_EXTENSION = '.md';
 
@@ -21,8 +21,8 @@ function normalizeSkillName(skillName) {
 
 function resolveSkillsDirectory() {
     const projectRoot = path.resolve(__dirname, '..');
-    const envDir = typeof process.env.BRAINSTORM_SKILLS_DIR === 'string'
-        ? process.env.BRAINSTORM_SKILLS_DIR.trim()
+    const envDir = typeof process.env.CONCLAVE_SKILLS_DIR === 'string'
+        ? process.env.CONCLAVE_SKILLS_DIR.trim()
         : typeof process.env.PROXIMA_SKILLS_DIR === 'string'
             ? process.env.PROXIMA_SKILLS_DIR.trim()
         : '';

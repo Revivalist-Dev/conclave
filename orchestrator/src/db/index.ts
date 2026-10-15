@@ -4,11 +4,11 @@ import { existsSync, mkdirSync } from 'fs';
 import { newProjectId, newTabId, newMessageId, newToolStepId } from './helper';
 import { SCHEMA_SQL } from './schema';
 
-// BRAINSTORM_DATA_DIR is set by the Tauri sidecar loader in production so the
+// CONCLAVE_DATA_DIR is set by the Tauri sidecar loader in production so the
 // database lives in the OS app-data dir; dev falls back to the repo data dir
 // (a compiled sidecar cannot resolve paths via import.meta.dir).
-export const DATA_DIR = process.env.BRAINSTORM_DATA_DIR || join(import.meta.dir, '../../data');
-const DB_PATH = join(DATA_DIR, 'brainstorm.db');
+export const DATA_DIR = process.env.CONCLAVE_DATA_DIR || join(import.meta.dir, '../../data');
+const DB_PATH = join(DATA_DIR, 'conclave.db');
 
 if (!existsSync(DATA_DIR)) {
 	mkdirSync(DATA_DIR, { recursive: true });

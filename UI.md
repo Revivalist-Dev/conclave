@@ -1,6 +1,6 @@
-# brAInstorm UI Specification & Navigation Architecture
+# Conclave UI Specification & Navigation Architecture
 
-This document specifies the user interface navigation, layout hierarchy, and collapsible widget behaviors for **brAInstorm**.
+This document specifies the user interface navigation, layout hierarchy, and collapsible widget behaviors for **Conclave**.
 
 ---
 
@@ -60,7 +60,7 @@ The sidebar organizes all discussions under their parent projects:
 
 ## 3. Collapsible Widgets & Truncation System
 
-To prevent large blocks of content from overwhelming the viewport, brAInstorm implements consistent, interactive collapsible widgets across user inputs, AI code blocks, and tool executions.
+To prevent large blocks of content from overwhelming the viewport, Conclave implements consistent, interactive collapsible widgets across user inputs, AI code blocks, and tool executions.
 
 ### 3.1 User Post Truncation (Large Inputs)
 When a user submits a long prompt (e.g. pasted logs, error dumps, extensive instructions):
@@ -171,7 +171,7 @@ The application features an ultra-lightweight, transparent desktop overlay mode 
   * **Submit**: <kbd>Enter</kbd> (without Shift) submits prompt immediately.
   * **Newline**: <kbd>Shift + Enter</kbd> adds a newline.
   * **Cancel**: <kbd>Escape</kbd> (global window handler), clicking the brain, or clicking `✕` cancels.
-  * **Resizable**: Bottom-right drag grip (`.resize-handle`) allows adjusting the prompt box width and height with `requestAnimationFrame` throttling. Saved in `localStorage` (`brainstorm_prompt_dims`) for persistent user preference.
+  * **Resizable**: Bottom-right drag grip (`.resize-handle`) allows adjusting the prompt box width and height with `requestAnimationFrame` throttling. Saved in `localStorage` (`conclave_prompt_dims`) for persistent user preference.
 * **Thinking (`thinking`)**:
   * Upon submission, the window collapses back to the compact HUD dimensions while the brain pulses with an amber glow (`bg-amber-400/60 animate-pulse`).
   * **60s Timeout Guard**: Automatically aborts if no response token/event arrives within 60 seconds, displaying an error card instead of hanging indefinitely.
@@ -180,7 +180,7 @@ The application features an ultra-lightweight, transparent desktop overlay mode 
   * Upon generation completion, the window expands to show a response preview card beside the brain.
   * Includes model badge (e.g. `DeepSeek`), countdown auto-dismiss timer (default 15s, pause on hover), and "Open Chat" action.
   * **Animated Progress Bar**: Smooth 1px progress bar at the bottom of the card visually tracking remaining time before auto-dismissal.
-  * **Cross-Window Tab Handover**: Clicking the response text or "Open Chat" emits a `switch-tab` Tauri event and persists `brainstorm_active_tab`, immediately restoring the desktop window on the exact conversation.
+  * **Cross-Window Tab Handover**: Clicking the response text or "Open Chat" emits a `switch-tab` Tauri event and persists `conclave_active_tab`, immediately restoring the desktop window on the exact conversation.
 * **Transparent Error Card (`error`)**:
   * Displayed if a network or backend error occurs.
   * **100% Transparent Background**: No dark opaque card background (`style="background: transparent !important;"` / `bg-transparent`).
@@ -192,7 +192,7 @@ The application features an ultra-lightweight, transparent desktop overlay mode 
 ### 6.2 Overlay Chrome & Controls
 * **Drag Region**: Entire overlay container acts as a native macOS window drag region (`data-tauri-drag-region`), with redundant JS mouse handlers removed to eliminate OS drag conflicts.
 * **Chrome Cluster**:
-  * Top-Right: `[ ⋮ Menu ]` offering **Restore Full Window** and **Quit brAInstorm**.
+  * Top-Right: `[ ⋮ Menu ]` offering **Restore Full Window** and **Quit Conclave**.
   * **Quit Action**: Calls native `exit_app` to terminate the full application process cleanly (preventing zombie background processes).
 * **Resize Grip**: Bottom-right 6-dot grip with NWSE cursor for sizing adjustments, throttled via `requestAnimationFrame` and cleanly resetting menu state.
 
@@ -201,7 +201,7 @@ When switching from overlay mode back to the main chat window (e.g. clicking "Op
 * **Cross-Window Active Tab Handover**:
   * Overlay passes the active `tabId` directly via the native Tauri `exit_overlay_mode(tab_id)` command.
   * Emits cross-window Tauri events (`switch-tab`, `refresh-active-thread`).
-  * Persists `brainstorm_active_tab` and timestamp `brainstorm_refresh_ts` in shared `localStorage`.
+  * Persists `conclave_active_tab` and timestamp `conclave_refresh_ts` in shared `localStorage`.
 * **Multi-Event Listener Triggers**:
   * The main desktop layout reacts to:
     1. **Rust Native Webview Event**: `refresh-active-thread` emitted directly to the `main` webview upon window unhide/focus (zero permission barriers).

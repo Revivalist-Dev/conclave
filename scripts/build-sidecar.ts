@@ -2,7 +2,7 @@
 /**
  * Compiles sidecar binaries for the Tauri desktop bundle:
  * 1. Orchestrator binary (JS + Bun runtime embedded) -> binaries/orchestrator-<target-triple>
- * 2. Native Rust MCP CLI bridge (zero runtime dependencies) -> binaries/brainstorm-mcp-<target-triple>
+ * 2. Native Rust MCP CLI bridge (zero runtime dependencies) -> binaries/conclave-mcp-<target-triple>
  *
  * Runs at BUILD TIME only (root `bun run build` / `build:sidecar`).
  */
@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, copyFileSync } from 'node:fs';
 
 const rootDir = join(import.meta.dir, '..');
 const src = join(rootDir, 'orchestrator', 'src', 'index.ts');
-const mcpSrc = join(rootDir, 'crates', 'brainstorm-mcp', 'src', 'main.rs');
+const mcpSrc = join(rootDir, 'crates', 'conclave-mcp', 'src', 'main.rs');
 const outDir = join(rootDir, 'client', 'tauri', 'src-tauri', 'binaries');
 
 if (!existsSync(outDir)) {
@@ -32,8 +32,8 @@ function hostTriple(): string {
 
 const triple = process.env.SIDECAR_TRIPLE || hostTriple();
 const orchestratorOutfile = join(outDir, `orchestrator-${triple}`);
-const mcpOutfile = join(outDir, `brainstorm-mcp-${triple}`);
-const localMcpBin = join(rootDir, 'crates', 'brainstorm-mcp', 'brainstorm-mcp');
+const mcpOutfile = join(outDir, `conclave-mcp-${triple}`);
+const localMcpBin = join(rootDir, 'crates', 'conclave-mcp', 'conclave-mcp');
 
 // 1. Compile orchestrator
 console.log(`[build-sidecar] Compiling orchestrator -> ${orchestratorOutfile}`);
@@ -64,21 +64,21 @@ try {
 	copyFileSync(mcpOutfile, localMcpBin);
 } catch {}
 
-// 3. Best-effort copy to /Applications/brAInstorm.app if installed
-const appBundleDir = '/Applications/brAInstorm.app';
+// 3. Best-effort copy to /Applications/Conclave.app if installed
+const appBundleDir = '/Applications/Conclave.app';
 if (existsSync(appBundleDir)) {
 	try {
 		const appMacOsDir = join(appBundleDir, 'Contents', 'MacOS');
 		const appResDir = join(appBundleDir, 'Contents', 'Resources', 'orchestrator', 'bin');
 		if (existsSync(appMacOsDir)) {
-			copyFileSync(mcpOutfile, join(appMacOsDir, 'brainstorm-mcp'));
+			copyFileSync(mcpOutfile, join(appMacOsDir, 'conclave-mcp'));
 		}
 		if (!existsSync(appResDir)) {
 			mkdirSync(appResDir, { recursive: true });
 		}
 		const jsBridgeSrc = join(rootDir, 'orchestrator', 'bin', 'mcp-server.js');
 		copyFileSync(jsBridgeSrc, join(appResDir, 'mcp-server.js'));
-		console.log('[build-sidecar] Synced MCP binaries into /Applications/brAInstorm.app');
+		console.log('[build-sidecar] Synced MCP binaries into /Applications/Conclave.app');
 	} catch (e: any) {
 		console.log(`[build-sidecar] Note: could not write to ${appBundleDir} (${e.message})`);
 	}

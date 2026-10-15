@@ -1,4 +1,4 @@
-//! Single WebSocket connection to the brAInstorm orchestrator (ws://127.0.0.1:4000/ws),
+//! Single WebSocket connection to the Conclave orchestrator (ws://127.0.0.1:4000/ws),
 //! owned by the Tauri process. Pure transport: no protocol knowledge lives here.
 //! All windows receive server traffic via the `orchestrator-message` event and send
 //! payloads via the `ws_send` command. The supervisor reconnects automatically with

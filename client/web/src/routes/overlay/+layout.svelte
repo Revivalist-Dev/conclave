@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>brAInstorm Overlay</title>
+	<title>Conclave Overlay</title>
 </svelte:head>
 
 <div class="overlay-root">

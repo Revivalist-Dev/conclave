@@ -1,6 +1,6 @@
-# brAInstorm UI & Orchestrator Communication Protocol
+# Conclave UI & Orchestrator Communication Protocol
 
-This document defines the WebSocket and HTTP communication protocol between the client (Tauri Desktop App / Web UI) and the brAInstorm Orchestrator (Bun runtime on port 4000).
+This document defines the WebSocket and HTTP communication protocol between the client (Tauri Desktop App / Web UI) and the Conclave Orchestrator (Bun runtime on port 4000).
 
 ---
 
@@ -16,12 +16,12 @@ This document defines the WebSocket and HTTP communication protocol between the 
          HTTP Fallback (http://127.0.0.1:4000)
                 │
 ┌───────────────▼───────────────┐
-│    brAInstorm Orchestrator    │
+│    Conclave Orchestrator    │
 │    (Bun Backend on Port 4000) │
 └───────┬───────────────┬───────┘
         │               │
   SQLite Database  Docker Compose LLM Containers
- (brainstorm.db)   (DanyAPI / Port 8000)
+ (conclave.db)   (DanyAPI / Port 8000)
 ```
 
 - **Transport**: JSON over WebSocket (`ws://127.0.0.1:4000/ws`).
