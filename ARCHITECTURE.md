@@ -707,8 +707,11 @@ Conclave utilizes a dual-window model in Tauri v2 for robust floating HUD operat
 
 ### 13.2 Platform Scope: Windows & Linux Only
 * Conclave targets Windows and Linux only, and is never built or shipped for any other platform.
-* Earlier revisions configured the overlay through the native window layer (an `objc2` dependency plus the Tauri native-private-API feature) so the HUD floated above fullscreen apps on every virtual Space.
-* That configuration, its dependency, and its setup hook have all been removed, because the product does not target that platform; the floating HUD relies on portable always-on-top behaviour instead.
+* Earlier revisions configured the overlay through the native window layer, using a
+  platform-specific binding crate and a Tauri native window feature, so the HUD could float above
+  fullscreen apps on every virtual Space.
+* That configuration, its dependency, and its setup hook have all been removed, because the product
+  does not target that platform; the floating HUD relies on portable always-on-top behaviour instead.
 
 ### 13.3 Window Move Tracking & Persistence
 * Native `WindowEvent::Moved` events captured in Tauri's event loop automatically update `state.minimalist.x/y` or `state.normal.x/y` and persist them to `~/.conclave.json`.
