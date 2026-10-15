@@ -187,3 +187,26 @@ cheapest step on **D2**. The next items in rank order are **C1** (the session-te
 - [MCP layer scaffold](./mcp-roadmap.md)
 - [DanyAPI review](./danyapi-review.md)
 - [Hardening and upgrades](./hardening-upgrades.md)
+
+## Reorientation, 2026-10-15 — Docker is out
+
+Senpai's decision after the ConclaveAPI survey changes this document's phase order, and the change is a
+removal rather than an addition. **The provider runs as a native `uv`-managed Python sidecar, not a
+container**, and `prod` (not the older `f ref` copy, and not the fork tip Conclave currently pins)
+becomes the tree ConclaveAPI is built from. The full reasoning, the retirements and the new phase order
+are in [ConclaveAPI — the rebrand, what it takes to run, and the image](./conclaveapi-rebrand.md) §"The
+decision".
+
+What this does to the phases below:
+
+- **Phase 3 (pin the supply chain)** survives with a different object: pin the *revision* and the
+  *dependency set* through `uv.lock` with hashes. The image half — base-image digest, vendored
+  `Dockerfile`, vendored compose — is retired.
+- **Phase 2's C1 and C9 need revisiting before anything else in Phase 2**, because the survey found
+  that neither `/v1/sessions` nor `/v1/files` exists in any local copy of the provider. C1 corrected a
+  path to match the review's claim rather than a live route, and the upload path posts to an endpoint
+  that is not there; attachments actually enter as data URIs on the completion request.
+- **C3, O3, F7 and W4's compose half are retired** — no daemon, so no container state to verify and no
+  compose file to run twice.
+- **Phase 4's end-to-end run** now needs no Docker at all, which makes it cheaper and removes the most
+  common first-run failure on Windows.
