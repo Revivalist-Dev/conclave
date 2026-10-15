@@ -36,6 +36,7 @@ export class LlmRouter {
 		const providerAdapter = getProvider(provider);
 		let fullResponse = '';
 		let totalTokens: number | undefined;
+		let providerError = false;
 
 		try {
 			for await (const chunk of providerAdapter.streamChat({
@@ -60,6 +61,7 @@ export class LlmRouter {
 				}
 			}
 		} catch (err: any) {
+			providerError = true;
 			const rawMsg = err.message || 'Unknown error occurred';
 			let cleanError = rawMsg;
 			try {
@@ -87,11 +89,12 @@ export class LlmRouter {
 			fullResponse,
 			undefined,
 			model,
-			totalTokens ? { totalTokens } : undefined
+			totalTokens ? { totalTokens } : undefined,
+			providerError ? { error: true } : undefined
 		);
 
 		// Update tab's last response snippet
-		repos.updateTabLastResponse(tabId, fullResponse.slice(0, 200), model);
+		repos.updateTabLastResponse(tabId, providerError ? '⚠ Provider error' : fullResponse.slice(0, 200), model);
 
 		yield {
 			type: 'complete',

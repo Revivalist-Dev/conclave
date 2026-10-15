@@ -36,6 +36,11 @@ export function initDatabase() {
 	} catch {
 		// column already exists
 	}
+	try {
+		db.exec('ALTER TABLE messages ADD COLUMN error INTEGER NOT NULL DEFAULT 0');
+	} catch {
+		// column already exists
+	}
 
 	// Migrate legacy 'General' project name to 'Discussions' with 'MessagesSquare' icon
 	db.prepare("UPDATE projects SET name = 'Discussions', icon = 'MessagesSquare' WHERE name = 'General'").run();
@@ -164,15 +169,16 @@ export const repos = {
 	},
 
 	// === Messages ===
-	addMessage: (tabId: string, role: 'user' | 'assistant' | 'system', content: string, attachments?: any[], model?: string, usage?: any) => {
+	addMessage: (tabId: string, role: 'user' | 'assistant' | 'system', content: string, attachments?: any[], model?: string, usage?: any, opts?: { error?: boolean }) => {
 		repos.ensureTab(tabId);
 		const id = newMessageId(tabId);
 		const now = Date.now();
+		const isError = opts?.error ? 1 : 0;
 		db.prepare(
-			'INSERT INTO messages (id, tab_id, role, content, attachments, model, usage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-		).run(id, tabId, role, content, attachments?.length ? JSON.stringify(attachments) : null, model || null, usage ? JSON.stringify(usage) : null, now);
+			'INSERT INTO messages (id, tab_id, role, content, attachments, model, usage, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+		).run(id, tabId, role, content, attachments?.length ? JSON.stringify(attachments) : null, model || null, usage ? JSON.stringify(usage) : null, isError, now);
 		db.prepare('UPDATE tabs SET updated_at = ? WHERE id = ?').run(now, tabId);
-		return { id, tab_id: tabId, role, content, attachments, model, usage, created_at: now };
+		return { id, tab_id: tabId, role, content, attachments, model, usage, error: isError, created_at: now };
 	},
 	getTabMessages: (tabId: string, days?: number) => {
 		let messages: any[] = [];

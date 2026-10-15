@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS messages (
     attachments TEXT,              -- JSON: [{name, filepath, mimeType, size}]
     model TEXT,                    -- model used for this exchange
     usage TEXT,                    -- JSON: {totalTokens, ...}
+    error INTEGER NOT NULL DEFAULT 0, -- 1 when the provider failed and content is a failure notice
     created_at INTEGER NOT NULL
 );
 
