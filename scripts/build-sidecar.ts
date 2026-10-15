@@ -77,24 +77,4 @@ try {
 	);
 }
 
-// 3. Best-effort copy to /Applications/Conclave.app if installed
-const appBundleDir = '/Applications/Conclave.app';
-if (existsSync(appBundleDir)) {
-	try {
-		const appMacOsDir = join(appBundleDir, 'Contents', 'MacOS');
-		const appResDir = join(appBundleDir, 'Contents', 'Resources', 'orchestrator', 'bin');
-		if (existsSync(appMacOsDir)) {
-			copyFileSync(mcpOutfile, join(appMacOsDir, 'conclave-mcp'));
-		}
-		if (!existsSync(appResDir)) {
-			mkdirSync(appResDir, { recursive: true });
-		}
-		const jsBridgeSrc = join(rootDir, 'orchestrator', 'bin', 'mcp-server.js');
-		copyFileSync(jsBridgeSrc, join(appResDir, 'mcp-server.js'));
-		console.log('[build-sidecar] Synced MCP binaries into /Applications/Conclave.app');
-	} catch (e: any) {
-		console.log(`[build-sidecar] Note: could not write to ${appBundleDir} (${e.message})`);
-	}
-}
-
 console.log('[build-sidecar] Done — all sidecars compiled.');

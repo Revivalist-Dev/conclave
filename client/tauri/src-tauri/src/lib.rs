@@ -111,21 +111,6 @@ fn clamp_main_position<R: tauri::Runtime>(
     (100.0, 100.0)
 }
 
-#[cfg(target_os = "macos")]
-fn setup_macos_overlay_spaces<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
-    if let Ok(ns_win_ptr) = window.ns_window() {
-        let ns_win = ns_win_ptr as *mut objc2::runtime::AnyObject;
-        unsafe {
-            // NSWindowCollectionBehavior:
-            // NSWindowCollectionBehaviorCanJoinAllSpaces (1 << 0)
-            // NSWindowCollectionBehaviorFullScreenAuxiliary (1 << 8)
-            // NSWindowCollectionBehaviorIgnoresCycle (1 << 6)
-            let behavior: usize = (1 << 0) | (1 << 8) | (1 << 6);
-            let _: () = objc2::msg_send![ns_win, setCollectionBehavior: behavior];
-        }
-    }
-}
-
 #[tauri::command]
 fn get_window_state(app: tauri::AppHandle) -> Result<AppWindowState, String> {
     let path = get_config_path(&app);
@@ -186,9 +171,6 @@ fn enter_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, String> {
         state.minimalist.x = Some(clamped_x);
         state.minimalist.y = Some(clamped_y);
         let _ = overlay_win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(clamped_x, clamped_y)));
-
-        #[cfg(target_os = "macos")]
-        setup_macos_overlay_spaces(&overlay_win);
 
         let _ = overlay_win.set_always_on_top(true);
         let _ = overlay_win.show();
@@ -325,9 +307,6 @@ pub fn run() {
                     state.minimalist.y = Some(clamped_y);
                     let _ = overlay.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(clamped_x, clamped_y)));
 
-                    #[cfg(target_os = "macos")]
-                    setup_macos_overlay_spaces(&overlay);
-
                     let _ = overlay.set_always_on_top(true);
                     let _ = overlay.show();
                     let _ = overlay.set_focus();
@@ -335,8 +314,6 @@ pub fn run() {
             } else {
                 // Normal mode active: hide overlay window, show main window
                 if let Some(overlay) = overlay_win {
-                    #[cfg(target_os = "macos")]
-                    setup_macos_overlay_spaces(&overlay);
                     let _ = overlay.hide();
                 }
                 if let Some(main) = main_win {
@@ -388,19 +365,6 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app_handle, event| {
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
-                if !has_visible_windows {
-                    if let Some(main) = app_handle.get_webview_window("main") {
-                        let _ = main.show();
-                        let _ = main.set_focus();
-                    } else if let Some(overlay) = app_handle.get_webview_window("overlay") {
-                        let _ = overlay.show();
-                        let _ = overlay.set_focus();
-                    }
-                }
-            }
-
             // Take the side-loaded orchestrator down with us (a pre-existing
             // one we reused is left running).
             if matches!(
