@@ -26,10 +26,17 @@ crates/conclave-mcp/conclave-mcp
 crates/conclave-mcp/conclave-mcp.exe
 .svelte-kit
 
-# Agent / assistant working directories
+# Agent / assistant working directories.
+# `.cursor/` is deliberately NOT ignored wholesale: this project's own wiki lives at
+# `.cursor/documents/` and is versioned with the code, so it travels with the fork rather than
+# existing on one machine. The `.cursor/*` form (not `.cursor/`) is required — git cannot re-include
+# anything from inside an excluded directory, so a negation under a bare `.cursor/` silently does
+# nothing. Everything else here stays ignored: hooks, tools and scratch.
+.cursor/*
+!.cursor/README.md
+!.cursor/documents/
 .playwright-cli/
 .zcode/
-.cursor/
 .codex/
 .opencode/
 .claude
