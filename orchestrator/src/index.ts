@@ -8,6 +8,7 @@ import { repos, db } from './db';
 import { getAllAvailableModels } from './providers';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { publicBootstrap, redactServiceErrors, sanitizeDiagnostic } from './surface';
 
 const PORT = Number(process.env.PORT) || 4000;
 
@@ -160,8 +161,8 @@ const server = Bun.serve<{ id: string }>({
 				JSON.stringify({
 					status: 'ok',
 					version: '0.1.0',
-					bootstrap,
-					services: supervisor.getStatus(),
+					bootstrap: publicBootstrap(bootstrap),
+					services: redactServiceErrors(supervisor.getStatus()),
 					projectsCount: repos.getProjects().length,
 					tabsCount: repos.getAllTabs().length,
 					uptime: process.uptime()
@@ -177,7 +178,7 @@ const server = Bun.serve<{ id: string }>({
 					projects: repos.getProjects(),
 					tabs: repos.getAllTabs(),
 					settings: repos.getSettings(),
-					services: supervisor.getStatus(),
+					services: redactServiceErrors(supervisor.getStatus()),
 					models: AVAILABLE_MODELS
 				}),
 				{ headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) } }
@@ -234,7 +235,7 @@ const server = Bun.serve<{ id: string }>({
 		if (url.pathname === '/api/log') {
 			const err = url.searchParams.get('err');
 			const msg = url.searchParams.get('msg');
-			console.log(`[CLIENT DIAGNOSTIC LOG] err="${err}" msg="${msg}"`);
+			console.log(`[CLIENT DIAGNOSTIC LOG] (untrusted) err="${sanitizeDiagnostic(err)}" msg="${sanitizeDiagnostic(msg)}"`);
 			return new Response(JSON.stringify({ ok: true }), {
 				headers: { 'Content-Type': 'application/json', ...getCorsHeaders(req) }
 			});
@@ -403,7 +404,7 @@ const server = Bun.serve<{ id: string }>({
 						const projects = repos.getProjects();
 						const tabs = repos.getAllTabs();
 						const settings = repos.getSettings();
-						const services = supervisor.getStatus();
+						const services = redactServiceErrors(supervisor.getStatus());
 						const plugins = await pluginManager.list();
 						sendWs(ws, {
 							type: 'SETTINGS_LOADED',

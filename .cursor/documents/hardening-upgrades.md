@@ -480,6 +480,18 @@ converts a whole class of silent staleness into a log line.
 
 **How to test it worked.** Register a handler that throws, emit the event, assert a `warn` naming the event.
 
+**Fix.** Applied 2026-10-15 in `orchestrator/src/plugins/bus.ts`. The empty `catch {}` in `pluginBus.emit`
+now binds the thrown value and warns — ``[PluginBus] Handler for "<event>" threw: <message>``, using
+`err?.message || err` so a non-Error throw is still named — and the `for` loop is otherwise unchanged, so a
+throw is logged and every remaining handler for that event still runs. `on` and the module header comment
+are untouched, so this is the Proposed change above and nothing more. Proved with `bun test` from
+`orchestrator/`: `orchestrator/tests/pluginBus.test.ts` covers a throwing `Error` (exactly one warn naming
+the event and the message), a later handler still running after an earlier throw, a thrown string still
+named, and no warn for an event with no handlers; running the suite with this fix stashed puts **4 tests
+to 1 pass, 3 fail, exit 1**, and restoring it puts them to **4 pass, 0 fail, exit 0** — so the phase's test
+demonstrably failed before the change. The suite is **15 cases across 2 files** as of the surface cases
+added below the same day.
+
 ### F7 — A service is "healthy" if anything on its port answers 404
 
 **Evidence.** `orchestrator/src/plugins/index.ts:587` —
@@ -733,6 +745,42 @@ authenticated diagnostics surface.
 **How to test it worked.** `curl -s http://127.0.0.1:4000/health | jq` must contain no drive letter or
 home-directory component.
 
+**Fix.** Applied 2026-10-15. The path-free projection lives in a new module, `orchestrator/src/surface.ts`,
+for the reason this task is fussy about: it imports only `crypto`'s `createHash` and a **type-only**
+`BootstrapResult` (`import type { … } from './bootstrap'`, erased at load), so importing it neither loads
+`../db` nor creates `orchestrator/data/conclave.db` — which is exactly what lets the projection be tested
+without booting the orchestrator. It exports `PublicBootstrap` and `publicBootstrap(result)`, carrying
+`dbInitialized`, `danyApiReady`, `sandboxConfigured` (true iff `sandboxPath` is a non-empty string) and
+`sandboxId`, the first 12 lowercase hex characters of `sha256(sandboxPath)`. The `/health` branch of
+`orchestrator/src/index.ts` now spreads the projection — `bootstrap: publicBootstrap(bootstrap),` — in
+place of the raw `BootstrapResult`, so `sandboxPath` never reaches the response; `status`, `version`,
+`services`, the project and tab counts and `uptime` are unchanged. `bootstrap/index.ts` was not edited.
+What was **not** done is the second half of the Proposed change: the path was dropped rather than kept
+behind an authenticated diagnostics surface, because that surface does not exist in the tree —
+the Proposed change defers to S4's per-boot token, and S4 has not landed. Proved with `bun test` from
+`orchestrator/`: the three `publicBootstrap` cases in `orchestrator/tests/surface.test.ts` assert the
+serialized projection contains no `AppData` and no drive letter, that `sandboxId` matches `^[0-9a-f]{12}$`
+and is stable across calls, and that a different path yields a different id; whole run **15 pass, 0 fail,
+exit 0**.
+
+**Fix (second half, appended the same day).** Re-probing the endpoint on a real boot showed the finding
+was **not** closed by the bootstrap projection alone: `services[].error` carried the same class of value —
+`Directory C:\Users\Wesle\AppData\Local\Temp\conclave-s8-probe\DanyAPI does not exist`, built in
+`orchestrator/src/processes/supervisor.ts` from `service.directory` — so the acceptance test above ("no
+drive letter or home-directory component") still failed against a live response. `surface.ts` therefore
+also exports `redactPaths(text)` (a Windows drive path, and a POSIX path under
+`Users`/`home`/`root`/`var`/`tmp`/`opt`, become `<path>`, so the message survives and only the location
+goes) and `redactServiceErrors(services)`, a non-mutating map over a service list. It is applied at all
+three places the service list leaves the process: the `/health` payload, `/api/settings/load`, and the
+`services` value in the WebSocket `LOAD_SETTINGS` case (the `SETTINGS_LOADED` broadcast). Verified end to
+end rather than by unit test alone: the orchestrator was booted with `CONCLAVE_DATA_DIR` at a temp
+directory and `PORT=4124`, and `GET /health` returned `"error": "Directory <path> does not exist"` with no
+drive letter, `AppData` or `Users` anywhere in the body. The boot wrote nothing into the repository —
+`orchestrator/data/` does not exist and the database went to the temp directory. **Residual, not fixed
+here:** the same redaction is a text scrub, so a path shape it does not recognise (a UNC path, or a
+Windows path written with forward slashes) still passes through; the durable fix is the authenticated
+diagnostics surface the Proposed change above defers to.
+
 ### S9 — Plugin install runs whatever a URL contains
 
 **Evidence.** `orchestrator/src/plugins/index.ts:263-286` clones an arbitrary git URL into the writable
@@ -826,6 +874,20 @@ per-boot token from S4.
 
 **How to test it worked.** Call it with a 100 KB `msg` containing a newline and `[Upload] Saved file`, and
 assert the log contains one record with an escaped payload rather than two lines.
+
+**Fix.** Applied 2026-10-15. `orchestrator/src/surface.ts` exports `MAX_DIAGNOSTIC_LEN = 4096` and
+`sanitizeDiagnostic(value: string | null)`, which collapses `\r\n`, `\r`, `\n`, U+2028 and U+2029 to a
+literal `\n`, clips the result to 4096 characters, and appends `…[+N chars truncated]` naming how many
+characters were dropped. The `/api/log` branch of `orchestrator/src/index.ts` now runs both query
+parameters through it and marks the record untrusted, keeping the existing tag so log greps still match:
+``console.log(`[CLIENT DIAGNOSTIC LOG] (untrusted) err="${sanitizeDiagnostic(err)}" msg="${sanitizeDiagnostic(msg)}"`)``.
+Two halves of the Proposed change were **not** landed because their prerequisites do not exist in the tree:
+the payload is not routed through O1's structured JSON logger (there is no such module), and the per-boot
+token from S4 is not required, so `/api/log` remains reachable by any local process; the `(untrusted)`
+marker is the stand-in until those land. Proved with `bun test` from `orchestrator/`: the three
+`sanitizeDiagnostic` cases in `orchestrator/tests/surface.test.ts` send `first line\n[Upload] Saved file`
+and assert the result contains no newline, drive a `MAX_DIAGNOSTIC_LEN + 100` string and assert the marker
+names `100`, and assert `null` and `''` both return `''`; whole run **15 pass, 0 fail, exit 0**.
 
 ## 5. Developer experience
 
@@ -1056,14 +1118,14 @@ effort is S/M/L as estimated above.
 | # | Item | Pattern | Effort | Value | Why it sits here |
 |---|---|---|---|---|---|
 | 1 | **D1** — de-hardcode the MCP paths in settings | — | S | High | Two string literals; every Windows user is currently given a path that cannot exist, and the "test connection" command fails with it — **done 2026-10-15** |
-| 2 | **F6** — log plugin bus handler failures | **[K1]** | XS | High | Three lines converts a whole class of silent window staleness into a log line |
+| 2 | **F6** — log plugin bus handler failures | **[K1]** | XS | High | Three lines converts a whole class of silent window staleness into a log line — **done 2026-10-15** |
 | 3 | **F10** — `console.warn` on the app-bundle copy failure | **[K1]** | XS | Medium | Matches the fix directly above it; removes the last silent swallow in the build script — **done 2026-10-15** |
-| 4 | **S8** — stop returning `sandboxPath` from `/health` | — | XS | Medium | One field; removes an absolute home path from an unauthenticated endpoint |
-| 5 | **O5** — cap and mark the diagnostics echo | — | XS | Medium | Trivial, and it closes a log-forging path into the surface the whole page wants people to trust |
+| 4 | **S8** — stop returning `sandboxPath` from `/health` | — | XS | Medium | One field; removes an absolute home path from an unauthenticated endpoint — **done 2026-10-15** |
+| 5 | **O5** — cap and mark the diagnostics echo | — | XS | Medium | Trivial, and it closes a log-forging path into the surface the whole page wants people to trust — **done 2026-10-15** |
 | 6 | **C1** — fix the session teardown path | **[K1]** | S | High | One string; a documented feature has never worked, and the check is two curls |
 | 7 | **C2** — make `danyApiReady` mean something | **[K1]** | S | High | Removes the first of two stacked lies about the provider |
 | 8 | **C3** — verify before claiming `running` | **[K1]** | S | High | Removes the second; together with C2 the engine indicator becomes truthful |
-| 9 | **F1** — client-side response deadline | **[K1]** | S | High | The most user-visible failure on the page: an indefinite spinner |
+| 9 | **F1** — client-side response deadline | **[K1]** | S | High | The most user-visible failure on the page: an indefinite spinner — **done 2026-10-15** |
 | 10 | **F2** — stop discarding malformed stream lines | **[K1]** | S | High | A truncated answer currently looks like a complete one — **done 2026-10-15** |
 | 11 | **C5** — separator-aware path confinement | **[K1]** | S | High | A security control that reads as present and is not; the test is two paths |
 | 12 | **C8** — cap uploads, uniquify names | — | S | Medium | Data loss on a repeated filename, and unbounded disk on a large body |

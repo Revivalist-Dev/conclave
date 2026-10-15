@@ -11,7 +11,9 @@ export const pluginBus = {
 		for (const fn of handlers[event] || []) {
 			try {
 				fn(payload);
-			} catch {}
+			} catch (err: any) {
+				console.warn(`[PluginBus] Handler for "${event}" threw: ${err?.message || err}`);
+			}
 		}
 	}
 };

@@ -165,6 +165,18 @@ live signal and in the history. Then the rest of Phase 1 in the ranking's own or
 [§8 of hardening-upgrades.md](./hardening-upgrades.md) has the sequence, and F6 / F10 are two and three
 lines each.
 
+**Updated later the same day.** F1 landed with `error` rendered in the history, and the next three items
+in §8's ranking followed it: **F6** (the plugin bus warns instead of swallowing a handler failure),
+**S8** (`/health` no longer carries an absolute path) and **O5** (the diagnostics echo is capped and
+marked untrusted). Re-probing `/health` against a real boot showed S8 was only half closed —
+`services[].error` carried the same class of value, built from `service.directory` in the supervisor —
+so that is now redacted at all three places the service list leaves the process. The `orchestrator/`
+suite is no longer empty: `bun test` **from `orchestrator/`** runs **15 cases across 2 files** and exits
+**0**, and F6's four cases were shown to fail **3 of 4** against the unfixed module (exit 1) before the
+fix was restored. F2's and F3's hand-run probes are still outside that suite; folding them in remains the
+cheapest step on **D2**. The next items in rank order are **C1** (the session-teardown route),
+**C2 + C3** (one failure reaching `/health` twice) and **C5** (the text-prefix path check).
+
 ## Related
 
 - [The project's own map](./index.md)
