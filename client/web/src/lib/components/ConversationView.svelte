@@ -329,6 +329,16 @@
 						</div>
 					{/if}
 
+					<!-- Failed turn: the server's persisted `error` flag, or a client deadline expiry (F1/F3) -->
+					{#if message.error}
+						<div
+							class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-950/40 border border-red-900/60 text-[11px] text-red-300 select-none"
+						>
+							<span class="text-red-400">⚠</span>
+							<span>Response failed — no usable answer was returned.</span>
+						</div>
+					{/if}
+
 					<!-- Assistant Text Content -->
 					{#if message.content}
 						<div
@@ -345,7 +355,7 @@
 								</span>
 							</div>
 						{/if}
-					{:else if harness.isGenerating}
+					{:else if harness.isGenerating && !message.error}
 						<!-- Animated three dots typing indicator -->
 						<div class="flex items-center gap-1.5 py-1 px-2 text-zinc-400">
 							<span class="inline-block w-2 h-2 rounded-full bg-zinc-400 animate-bounce [animation-delay:-0.3s]"></span>

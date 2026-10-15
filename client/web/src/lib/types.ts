@@ -36,6 +36,8 @@ export interface Message {
 	model?: string;
 	totalTokens?: number;
 	usage?: any;
+	/** Set when the server's `messages.error` column is 1 (provider failure), or by the client deadline on expiry. */
+	error?: boolean;
 	createdAt: number;
 }
 

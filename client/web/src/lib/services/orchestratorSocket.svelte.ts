@@ -214,6 +214,8 @@ class OrchestratorSocketClient {
 							lastMsg.content += data.token;
 						}
 					}
+					// F1: a token proves the turn is alive; re-arm the idle deadline.
+					harness.noteGenerationActivity();
 					break;
 				}
 
@@ -248,6 +250,8 @@ class OrchestratorSocketClient {
 							}
 						}
 					}
+					// F1: a tool step proves the turn is alive; re-arm the idle deadline.
+					harness.noteGenerationActivity();
 					break;
 				}
 
@@ -262,11 +266,13 @@ class OrchestratorSocketClient {
 							}
 						}
 					}
+					// F1: usage proves the turn is alive; re-arm the idle deadline.
+					harness.noteGenerationActivity();
 					break;
 				}
 
 				case 'CHAT_ERROR': {
-					harness.isGenerating = false;
+					harness.endGeneration();
 					const conv = harness.conversations.find((c) => c.id === data.tabId || c.chatId === data.tabId);
 					if (conv && conv.messages.length > 0) {
 						const lastMsg = conv.messages[conv.messages.length - 1];
@@ -281,7 +287,7 @@ class OrchestratorSocketClient {
 				}
 
 				case 'CHAT_COMPLETE': {
-					harness.isGenerating = false;
+					harness.endGeneration();
 					const conv = harness.conversations.find((c) => c.id === data.tabId || c.chatId === data.tabId);
 					if (conv && conv.messages.length > 0) {
 						const lastMsg = conv.messages[conv.messages.length - 1];

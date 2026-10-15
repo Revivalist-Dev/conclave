@@ -1,5 +1,6 @@
 import type { Conversation, Message, Provider, HarnessSettings, ToolStep, Attachment, Project, Tab, ModelInfo } from '../types';
 import { enterMinimalistWindow, exitMinimalistWindow, loadWindowState, initWindowListeners, setAlwaysOnTop, isTauriEnvironment } from '../services/windowManager';
+import { PromptDeadline, type PromptTimeoutPhase } from '../services/promptDeadline';
 import { goto } from '$app/navigation';
 
 const INITIAL_PROVIDERS: Provider[] = [
@@ -117,6 +118,15 @@ class HarnessStore {
 			: 'deepseek-v4-flash'
 	);
 	isGenerating = $state<boolean>(false);
+	/**
+	 * F1 — the client-side response deadline. `isGenerating` is otherwise reset
+	 * only by a server broadcast (or the HTTP fallback's `finally`), and a dead
+	 * orchestrator queues the payload natively instead of failing it, so without
+	 * this the send control can spin forever.
+	 */
+	private promptDeadline = new PromptDeadline((phase) => this.expirePromptTurn(phase));
+	/** The in-flight turn the deadline guards: its tab id and placeholder message id. */
+	private pendingTurn: { tabId: string; messageId: string | null } | null = null;
 	isMinimalistMode = $state<boolean>(false);
 	messageSortOrder = $state<'asc' | 'desc'>('asc'); // 'asc' = oldest first, 'desc' = newest first
 
@@ -558,6 +568,9 @@ class HarnessStore {
 			model: m.model,
 			totalTokens: m.totalTokens ?? m.usage?.totalTokens,
 			usage: m.usage,
+			// Server stores `error` as INTEGER 0/1 (orchestrator/src/db/schema.sql); the
+			// Message interface wants a boolean, so coerce both shapes here.
+			error: m.error === 1 || m.error === true,
 			toolSteps: m.tool_steps?.map((s: any) => ({
 				id: s.id,
 				name: s.title,
@@ -726,6 +739,41 @@ class HarnessStore {
 		this.closeTab(tabId);
 	}
 
+	/**
+	 * A token / tool step / usage frame proves the in-flight turn is alive: re-arm
+	 * the idle budget and drop a stale failure mark (a queued prompt can still be
+	 * flushed and answered after the deadline already fired).
+	 */
+	noteGenerationActivity() {
+		const turn = this.pendingTurn;
+		if (turn?.messageId) {
+			const conv = this.conversations.find((c) => c.id === turn.tabId);
+			const msg = conv?.messages.find((m) => m.id === turn.messageId);
+			if (msg?.error) msg.error = false;
+		}
+		this.promptDeadline.noteActivity();
+	}
+
+	/** The server said the turn ended (`CHAT_COMPLETE` / `CHAT_ERROR`): clear the deadline too. */
+	endGeneration() {
+		this.promptDeadline.clear();
+		this.pendingTurn = null;
+		this.isGenerating = false;
+	}
+
+	/** Deadline expiry: the server never answered, so stop the spinner and mark the turn failed. */
+	private expirePromptTurn(phase: PromptTimeoutPhase) {
+		const turn = this.pendingTurn;
+		this.isGenerating = false;
+		if (turn) {
+			const conv = this.conversations.find((c) => c.id === turn.tabId);
+			const msgs = conv?.messages ?? [];
+			const msg = turn.messageId ? msgs.find((m) => m.id === turn.messageId) : msgs[msgs.length - 1];
+			if (msg && msg.role === 'assistant') msg.error = true;
+		}
+		console.warn(`[Harness] Prompt deadline expired (${phase}); cleared the send spinner (F1).`);
+	}
+
 	async sendMessage(content: string, attachments?: Attachment[]) {
 		const hasAttachments = attachments && attachments.length > 0;
 		const trimmedContent = content.trim();
@@ -752,6 +800,11 @@ class HarnessStore {
 		}
 
 		this.isGenerating = true;
+		// F1: arm the client deadline before either transport, because only a
+		// CHAT_COMPLETE / CHAT_ERROR broadcast resets `isGenerating` and a dead
+		// orchestrator queues the send instead of failing it.
+		this.pendingTurn = { tabId: conv.id, messageId: null };
+		this.promptDeadline.start();
 
 		// 1. If inside Tauri or WebSocket connected, stream directly via WebSocket
 		if (isTauriEnvironment() || (typeof window !== 'undefined' && (window as any).__orchestratorSocket?.status === 'connected')) {
@@ -765,6 +818,7 @@ class HarnessStore {
 				createdAt: Date.now()
 			};
 			conv.messages.push(assistantMsg);
+			if (this.pendingTurn) this.pendingTurn.messageId = assistantMsg.id;
 
 			(window as any).__orchestratorSocket?.send({
 				type: 'PROMPT_SEND',
@@ -810,6 +864,7 @@ class HarnessStore {
 				createdAt: Date.now()
 			};
 			conv.messages.push(assistantMsg);
+			if (this.pendingTurn) this.pendingTurn.messageId = assistantMsg.id;
 
 			// Handle streaming or JSON response from Bun router
 			const contentType = response.headers.get('content-type') || '';
@@ -871,7 +926,8 @@ class HarnessStore {
 				createdAt: Date.now()
 			});
 		} finally {
-			this.isGenerating = false;
+			// F1: keep the existing HTTP-fallback reset, and clear the deadline with it.
+			this.endGeneration();
 		}
 	}
 }
