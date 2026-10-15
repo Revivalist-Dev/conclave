@@ -111,6 +111,9 @@ export class DanyApiProvider implements ProviderAdapter {
 			const reader = res.body.getReader();
 			const decoder = new TextDecoder();
 			let buffer = '';
+			let usableChunks = 0;
+			let discardedLines = 0;
+			let sawTerminator = false;
 
 			while (true) {
 				const { done, value } = await reader.read();
@@ -124,7 +127,10 @@ export class DanyApiProvider implements ProviderAdapter {
 					const trimmed = line.trim();
 					if (!trimmed || !trimmed.startsWith('data: ')) continue;
 					const jsonStr = trimmed.slice(6).trim();
-					if (jsonStr === '[DONE]') continue;
+					if (jsonStr === '[DONE]') {
+						sawTerminator = true;
+						continue;
+					}
 
 					try {
 						const parsed = JSON.parse(jsonStr);
@@ -141,6 +147,7 @@ export class DanyApiProvider implements ProviderAdapter {
 						// Handle incremental token delta
 						const token = parsed.choices?.[0]?.delta?.content || '';
 						if (token) {
+							usableChunks++;
 							yield { type: 'token', token };
 						}
 
@@ -151,14 +158,24 @@ export class DanyApiProvider implements ProviderAdapter {
 								((parsed.usage.prompt_tokens || 0) + (parsed.usage.completion_tokens || 0)) ??
 								parsed.usage.total;
 							if (typeof totalTokens === 'number') {
+								usableChunks++;
 								console.log(`[DanyAPI] ${modelDisplayName} tokens used: ${totalTokens}`);
 								yield { type: 'usage', totalTokens, usage: parsed.usage, model: effectiveModel };
 							}
 						}
 					} catch (err: any) {
 						if (err.message?.includes('DeepSeek error:')) throw err;
+						discardedLines++;
+						console.warn(`[DanyAPI] Discarded malformed stream line ${discardedLines}: ${trimmed}`);
 					}
 				}
+			}
+
+			if (usableChunks === 0 && (discardedLines > 0 || !sawTerminator)) {
+				throw new Error(
+					`DanyAPI stream from ${this.baseUrl}/chat/completions produced no usable chunk ` +
+						`(${discardedLines} discarded line(s), ${sawTerminator ? 'terminator received' : 'no terminator'}); the response was empty or truncated`
+				);
 			}
 		} catch (err: any) {
 			clearTimeout(timeoutId);
