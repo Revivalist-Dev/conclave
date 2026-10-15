@@ -6,6 +6,7 @@ import { pluginBus } from './plugins/bus';
 import { llmRouter } from './router';
 import { repos, db } from './db';
 import { getAllAvailableModels } from './providers';
+import { deleteProviderSession } from './providers/sessions';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { publicBootstrap, redactServiceErrors, sanitizeDiagnostic } from './surface';
@@ -39,8 +40,9 @@ pluginBus.on('tab-updated', ({ tabId }) => {
 
 /**
  * Best-effort: ask every provider backend that may host this thread's
- * server-side session to delete it (DELETE <endpoint>/v1/session/<tabId>).
- * Failures are ignored — the local thread is deleted regardless.
+ * server-side session to delete it (DELETE <endpoint>/v1/sessions/<tabId>).
+ * The local thread is deleted regardless, so the caller does not wait on the
+ * result — but a failure is logged rather than swallowed, by the request module.
  */
 function deleteProviderSessions(tabId: string): void {
 	const endpoints: string[] = [];
@@ -52,12 +54,11 @@ function deleteProviderSessions(tabId: string): void {
 	} catch {}
 
 	for (const endpoint of endpoints) {
-		fetch(`${endpoint}/session/${encodeURIComponent(tabId)}`, {
-			method: 'DELETE',
-			signal: AbortSignal.timeout(3000)
-		})
-			.then((res) => console.log(`[Tabs] Provider session delete ${tabId} @ ${endpoint}: ${res.status}`))
-			.catch(() => console.log(`[Tabs] Provider session delete ${tabId} @ ${endpoint}: unreachable (ignored)`));
+		void deleteProviderSession(endpoint, tabId)
+			.then((result) => {
+				if (result.ok) console.log(`[Tabs] Provider session delete ${tabId} @ ${endpoint}: ${result.status}`);
+			})
+			.catch((err: any) => console.warn(`[Tabs] Provider session delete ${tabId} @ ${endpoint} failed: ${err?.message || err}`));
 	}
 }
 

@@ -1,6 +1,7 @@
 import { spawnSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
+import { isConfined } from './paths';
 import { repos } from '../db';
 import { supervisor } from '../processes/supervisor';
 import { pluginManager } from '../plugins';
@@ -258,7 +259,7 @@ export class LightweightMcpServer {
 				let cwd = this.rootDir;
 				if (args.cwd && typeof args.cwd === 'string') {
 					const resolvedCwd = resolve(this.rootDir, args.cwd);
-					if (resolvedCwd.startsWith(this.rootDir)) {
+					if (isConfined(this.rootDir, resolvedCwd)) {
 						cwd = resolvedCwd;
 					}
 				}
@@ -296,7 +297,7 @@ export class LightweightMcpServer {
 					};
 				}
 				const filePath = resolve(this.rootDir, args.path);
-				if (!filePath.startsWith(this.rootDir)) {
+				if (!isConfined(this.rootDir, filePath)) {
 					return {
 						jsonrpc: '2.0',
 						id,
@@ -334,7 +335,7 @@ export class LightweightMcpServer {
 					};
 				}
 				const filePath = resolve(this.rootDir, args.path);
-				if (!filePath.startsWith(this.rootDir)) {
+				if (!isConfined(this.rootDir, filePath)) {
 					return {
 						jsonrpc: '2.0',
 						id,

@@ -144,7 +144,18 @@ export class ServiceSupervisor {
 
 			if (upRes.status !== 0) {
 				const errMsg = upRes.stderr?.trim() || upRes.stdout?.trim() || 'Docker compose up failed';
-				console.warn(`[Supervisor] ${service.name} docker compose up warning: ${errMsg}`);
+				// A non-zero `up` is not by itself proof the container is down —
+				// an older container can still be serving — so ask the daemon before
+				// deciding. If it cannot confirm one, fail here rather than falling
+				// through to a health poll that would claim `running` regardless.
+				if (!this.isContainerUp(service)) {
+					service.status = 'failed';
+					service.error = `docker compose up failed: ${errMsg}`;
+					console.warn(`[Supervisor] ${service.name} docker compose up failed: ${errMsg}`);
+					this.recordState(service);
+					return;
+				}
+				console.warn(`[Supervisor] ${service.name} docker compose up reported an error (${errMsg}) but the daemon reports a running container; continuing.`);
 			} else {
 				console.log(`[Supervisor] ${service.name} docker container started.`);
 			}
@@ -163,9 +174,15 @@ export class ServiceSupervisor {
 			if (isHealthy) {
 				service.status = 'running';
 				console.log(`[Supervisor] ${service.name} (DeepSeek/Qwen) verified healthy on http://127.0.0.1:${service.port}`);
+			} else if (this.isContainerUp(service)) {
+				// Verified with the daemon, not assumed: the container is up and the
+				// HTTP probe simply has not answered yet — the proxy is warming up.
+				service.status = 'running';
+				console.log(`[Supervisor] ${service.name} container is up (docker compose ps); warming up.`);
 			} else {
-				service.status = 'running'; // Container is up, proxy still warming up
-				console.log(`[Supervisor] ${service.name} container is running; warming up.`);
+				service.status = 'failed';
+				service.error = 'Health probe never answered and docker compose ps reports no running container';
+				console.warn(`[Supervisor] ${service.name} did not become healthy and the daemon reports no running container.`);
 			}
 			this.recordState(service);
 		} catch (err: any) {
@@ -227,6 +244,47 @@ export class ServiceSupervisor {
 				signal: AbortSignal.timeout(2000)
 			});
 			return res.ok;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Ask the daemon whether this service actually has a running container.
+	 * `docker compose up -d` can return non-zero while an older container is
+	 * still up, and it can return zero for a container that has already exited,
+	 * so the health probe's silence alone cannot distinguish "warming up" from
+	 * "not there". This is the check that makes the `running` claim honest.
+	 */
+	private isContainerUp(service: ManagedService): boolean {
+		try {
+			const psRes = spawnSync('docker', ['compose', 'ps', '--format', 'json'], {
+				cwd: service.directory,
+				encoding: 'utf-8',
+				timeout: 10000
+			});
+			if (psRes.status !== 0) return false;
+			const raw = (psRes.stdout || '').trim();
+			if (!raw) return false;
+
+			// Modern Compose prints one JSON array; older versions print one JSON
+			// object per line. Accept either rather than depending on the version.
+			let entries: any[] = [];
+			if (raw.startsWith('[')) {
+				entries = JSON.parse(raw);
+			} else {
+				entries = raw
+					.split('\n')
+					.map((line) => line.trim())
+					.filter(Boolean)
+					.map((line) => JSON.parse(line));
+			}
+
+			return entries.some((entry) => {
+				const state = String(entry?.State ?? '').toLowerCase();
+				const status = String(entry?.Status ?? '').toLowerCase();
+				return state === 'running' || status.startsWith('up');
+			});
 		} catch {
 			return false;
 		}

@@ -47,6 +47,7 @@ export function redactServiceErrors<T extends { error?: string | null }>(service
 export interface PublicBootstrap {
 	dbInitialized: boolean;
 	danyApiReady: boolean;
+	danyError: string | null;
 	sandboxConfigured: boolean;
 	sandboxId: string; // 12 hex chars of sha256(sandboxPath)
 }
@@ -54,9 +55,13 @@ export interface PublicBootstrap {
 /** Project a BootstrapResult onto its path-free public shape. */
 export function publicBootstrap(result: BootstrapResult): PublicBootstrap {
 	const sandboxPath = typeof result.sandboxPath === 'string' ? result.sandboxPath : '';
+	const rawError = typeof result.danyError === 'string' ? result.danyError : null;
 	return {
 		dbInitialized: result.dbInitialized,
 		danyApiReady: result.danyApiReady,
+		// A clone stderr or a thrown fs error carries an absolute path; redacting
+		// it here keeps S8 closed on this new field.
+		danyError: rawError ? redactPaths(rawError) : null,
 		sandboxConfigured: sandboxPath.length > 0,
 		sandboxId: createHash('sha256').update(sandboxPath).digest('hex').slice(0, 12)
 	};

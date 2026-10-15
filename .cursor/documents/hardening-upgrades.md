@@ -82,6 +82,8 @@ failure: log the status at `warn` and record it, so the next wrong URL is visibl
 `curl -s 'http://127.0.0.1:8000/v1/sessions' | jq` before and after — the id must disappear. Today it
 stays. This is a two-request integration test and it is the cheapest total-failure check in the tree.
 
+**Fix.** Applied 2026-10-15. The request moved into a new module, `orchestrator/src/providers/sessions.ts`, exporting `deleteProviderSession(endpoint, tabId, fetchImpl)` and a `DeleteSessionResult` of `{ ok, status?, error? }`. It imports neither `../db` nor the server, takes its `fetch` as a third argument, calls `<endpoint>/sessions/<encodeURIComponent(tabId)>`, warns with the endpoint, the tab id and the status when `res.ok` is false, and turns a thrown fetch into a returned `error` rather than a rejection. `deleteProviderSessions` in `orchestrator/src/index.ts` keeps its `(tabId: string): void` signature and stays fire-and-forget; it now calls `void deleteProviderSession(...).then(...).catch(...)`, so the non-OK path is logged by the module and the promise still cannot reject unhandled. The doc comment above it was corrected from `/v1/session/<tabId>` to `/v1/sessions/<tabId>`. The empty `catch {}` around `repos.isDeepSeekEnabled()` is untouched, as instructed, and both call sites (`DELETE /api/tabs/:id` and the `TAB_DELETE` case) are unchanged. **Deviation from the Proposed change:** the Proposed change asks only that the path be fixed and the status logged — the injectable fetch, the plain result and the separate module are additions, required by the task's testability requirement. Proved with `bun test` from `orchestrator/`: `orchestrator/tests/sessions.test.ts` asserts a single `DELETE` to `http://127.0.0.1:8000/v1/sessions/tab%2Fwith%20space` (it contains `/sessions/` and does not match `/session/`), that a trailing slash is stripped, that an HTTP 500 answers `{ ok: false, status: 500 }` with exactly one warn naming the endpoint, the tab and the status, and that a rejected fetch returns `ok: false` with the message and does not throw. **Not done:** the finding's own integration test (delete a tab, then `curl .../v1/sessions` and watch the id vanish) was not run — it needs a live DanyAPI with credentials, which this machine's container does not have, as C3's fix records; the route is asserted from the request the module builds instead.
+
 ### C2 — Bootstrap reports `danyApiReady: true` for an empty directory **[K1]**
 
 **Finding.** A failed clone, an unreachable network, or a fork that has been deleted all produce a
@@ -115,6 +117,8 @@ surface it in `/health`.
 orchestrator, and assert `/health` reports `danyApiReady: false` with a non-null error. Today it reports
 `true`.
 
+**Fix.** Applied 2026-10-15. The readiness decision is a new pure module, `orchestrator/src/bootstrap/ready.ts`, exporting `assessDanyApi(dir): { ready: boolean; error: string | null }`; it imports only `fs` and `path`, so a test loads it without pulling in `../db` and without creating `orchestrator/data/conclave.db`. Readiness means `<dir>/DanyAPI` is a directory **and** `<dir>/DanyAPI/docker-compose.yml` exists. `BootstrapResult` in `orchestrator/src/bootstrap/index.ts` gained `danyError: string | null`; both clone-failure branches now record ``DanyAPI clone failed: <stderr>`` (or the thrown `err.message`) instead of setting `danyReady = true`, the clone-success branch no longer sets it at all, and readiness is taken from `assessDanyApi(sandboxDir)` afterwards — so a stub directory, a failed clone and a deleted fork all report `false` with a reason. In the `dataDir` branch the sandbox is still skipped and `danyApiReady` is still `false`, now with `danyError` naming the reason and a comment saying so. `PublicBootstrap` in `orchestrator/src/surface.ts` gained `danyError`, run through the existing `redactPaths()` so an absolute path inside a clone stderr cannot reopen S8. **Deviation from the Proposed change:** the Proposed change reads as though `docker-compose.yml` and `DanyAPI/` are siblings under the sandbox; the module requires the compose file **inside** `DanyAPI/`, because that is the working directory `docker compose up -d` actually runs in (`ServiceSupervisor` builds it as `join(sandboxDir, 'DanyAPI')`), so a sibling compose file would report ready for a service that cannot start. Proved with `bun test` from `orchestrator/`: `orchestrator/tests/bootstrapReady.test.ts` builds its sandboxes with `mkdtempSync` under the OS temp dir — never `orchestrator/data`, and it never sets `CONCLAVE_DATA_DIR` — and asserts an empty dir is not ready with a non-null error, a `DanyAPI/` holding only a `Dockerfile` is not ready naming `docker-compose.yml`, a `DanyAPI/` holding both is ready with a null error, and a compose file with no source tree is not ready naming the missing tree. The new `publicBootstrap` case in `orchestrator/tests/surface.test.ts` asserts a path-bearing `danyError` serializes with no drive letter and no `AppData`, keeps `<path>` in its place, and that a null stays null. **Not done:** the live half of the finding's test (point `danyRepo` at an unreachable host and read `/health`) was not run as such; the equivalent was observed on a real boot in C3's test below, where `/health` returned `bootstrap.danyApiReady: false` with a non-null `danyError`.
+
 ### C3 — The supervisor marks a container `running` after `docker compose up` failed **[K1]**
 
 **Finding.** A failed compose invocation that also fails its health poll ends with the service recorded as
@@ -144,6 +148,8 @@ Return early when `upRes.status !== 0` and the daemon is unreachable.
 **How to test it worked.** Rename `api_sandbox/DanyAPI/Dockerfile` so the build fails, boot, and assert
 `GET /health` reports `services[0].status === 'failed'` with a non-empty `error`. Today it reports
 `running`.
+
+**Fix.** Applied 2026-10-15 in `orchestrator/src/processes/supervisor.ts`. A new private `isContainerUp(service)` runs `docker compose ps --format json` in `service.directory`, accepts either the single-array or the one-object-per-line shape, and returns true only for an entry whose `State` is `running` or whose `Status` begins with `up`. When `upRes.status !== 0` the code asks the daemon first: if `isContainerUp` is false it sets `service.status = 'failed'`, `service.error = \`docker compose up failed: <stderr>\`` and returns before attaching the log streamer or polling; if the daemon does report a running container it warns and continues, because a non-zero `up` over an already-serving container is not a failure. The 10 × 1 s poll is unchanged, but its `else` no longer claims `running`: `isContainerUp` true now means the container is verified up while the HTTP probe is still warming up, logging `container is up (docker compose ps); warming up.`, and `isContainerUp` false sets `failed` with `Health probe never answered and docker compose ps reports no running container`. The `const`-style comment that asserted an unchecked fact (`// Container is up, proxy still warming up`) is gone. The status-0 path's behaviour and logging are unchanged, and only the claim changed on the paths that were already logging. Proved live twice from `orchestrator/`, each with `CONCLAVE_DATA_DIR` at a fresh temp directory, a spare `PORT`, and a staged `<temp>/DanyAPI/` — the repo's `orchestrator/data/` was checked with `Test-Path` after both boots and stayed absent. Run one set `COMPOSE_PROJECT_NAME` fresh so the build genuinely ran and failed: `GET /health` returned `services[0].status: "failed"` with `error` beginning `docker compose up failed:` and ending `failed to solve: process "/bin/sh -c echo build-must-fail" did not complete successfully: exit code: 1`. Run two used the machine's own `danyapi-danyapi:latest` image, where compose returned zero but the container started and died (`RuntimeError: no valid credentials: set DEEPSEEK_TOKENS or QWEN_TOKENS`, exit code 3): `/health` returned `failed` with `Health probe never answered and docker compose ps reports no running container`, where the pre-fix code recorded `running`. Both live runs also returned `bootstrap.danyApiReady: false` with a non-null `danyError`, which is C2's half observed end to end. **Deviation and a trap worth naming:** the finding's staged test as written — rename `api_sandbox/DanyAPI/Dockerfile` so the build fails — does not by itself force a build, because Compose reuses an existing `danyapi-danyapi:latest` image (built 2026-09-30 on this machine) instead of building when the project and service image names already exist; that is why run one needed `COMPOSE_PROJECT_NAME` and why run two, without it, exercised the poll-timeout branch instead of the early return. Nothing in the tree pins that image, so this is a machine-state hazard for the test rather than a code defect. **Not done:** `service_state` still gains a row from `recordState`, but O3 remains open, so `/health` answers from the in-memory map and a restart still loses it.
 
 ### C4 — MCP tool arguments are never validated against the advertised schema **[K2]**
 
@@ -203,6 +209,45 @@ reintroduce the gap. `rootDir` itself should come from a real setting rather tha
 
 **How to test it worked.** Two cases, both assertable in one script: `..\sibling\file` must be denied, and
 a file genuinely inside the root must still be allowed. Today the first is allowed.
+
+**Fix.** Applied 2026-10-15 in `orchestrator/`. The three copies of the check are gone: confinement now
+lives in one pure module, `orchestrator/src/mcp/paths.ts`, which imports only `path` and `fs` (no `../db`,
+so importing it cannot create `orchestrator/data/conclave.db`) and exports `isConfined(root, candidate)`.
+It does what the Proposed change asked, with both sides canonicalised: `isConfined` resolves `candidate`
+against `root`, takes `realpathSync` of each, and returns `c === r || c.startsWith(r + sep)` with `sep`
+from `path` — the separator form is what refuses the sibling that shares the root as a text prefix, and
+the canonicalisation is what refuses a symlink. The same `realpathSync` throws for a `write_file` target
+that does not exist yet, so the helper walks to the nearest existing ancestor, re-appends the
+non-existent tail, and judges that against the root rather than failing either way; a filesystem root
+that already ends in `sep` is not given a second one, so `isConfined('C:\\', 'C:\\x')` is not the false
+negative the bare `r + sep` would produce. Comparison is lowercased on
+`process.platform === 'win32'` and left alone elsewhere — **measured, not assumed**: `realpathSync` on
+this machine returns the *input* case (`realpathSync('C:\\USERS\\…') === 'C:\\USERS\\…'`), so without the
+fold a differently-cased root is still wrongly refused. `orchestrator/src/mcp/index.ts` calls the helper
+at all three sites — `read_file`, `write_file` and the `run_command` cwd — and
+`this.rootDir = process.env.CONCLAVE_PROJECT_ROOT || process.cwd()` is unchanged, because making that
+root required is **S5**, still open. **Two deviations, both deliberate.** The `run_command` cwd site keeps
+its existing shape: it was never a denial — a cwd outside the root silently falls back to `rootDir` — and
+it still is, only the predicate changed to the shared one, because flipping it to an `Access denied`
+envelope would be a new error contract. And the symlink case in the test is created as a Windows
+**junction** (`symlinkSync(outside, link, 'junction')`) rather than a symbolic link, because a junction
+needs no elevation and `realpathSync` resolves it identically, so the arm is proved rather than skipped.
+Proved with `bun test` from `orchestrator/`: `orchestrator/tests/paths.test.ts` holds seven `isConfined`
+cases in a `mkdtempSync` fixture under the OS temp directory — the sibling `..\conclave-backup\secrets.env`
+denied (the case that was allowed), a file genuinely inside the root allowed, a path equal to the root
+allowed, a differently-cased root allowed (guarded by `test.if(process.platform === 'win32')` so it
+*skips* on any other platform rather than passing), a symlink inside the root pointing outside denied, a
+not-yet-existing `write_file` target whose parent is inside the root allowed, and one whose parent
+escapes denied — and the whole suite is **15 pass → 22 pass, 0 fail, exit 0** (7 new cases; neither
+pre-existing file was touched). Each arm was shown to be load-bearing by mutating `paths.ts` and
+re-running that one file: dropping `sep` from the prefix (`const prefix = r;`) fails the sibling arm and
+the escaping-write-target arm; replacing the candidate's `realpath` with its resolved string fails the
+symlink arm; returning `p` instead of `p.toLowerCase()` on Windows fails the differently-cased-root arm;
+a helper that fails *closed* when the candidate's `realpath` throws fails the not-yet-existing-allowed
+arm; one that fails *open* (`catch { return true; }`) fails the escaping-write-target arm; and
+`return false` at the top of `isConfined` fails every allow arm. Not done here: **S5**, so when
+`CONCLAVE_PROJECT_ROOT` is unset the root is still `process.cwd()` — the confine is now correct, but the
+directory it confines to is still launch-dependent.
 
 ### C6 — The UI offers providers the router cannot serve
 

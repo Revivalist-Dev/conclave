@@ -34,24 +34,44 @@ describe('publicBootstrap', () => {
 
 	test('carries no absolute path', () => {
 		const json = JSON.stringify(
-			publicBootstrap({ dbInitialized: true, danyApiReady: true, sandboxPath: path })
+			publicBootstrap({ dbInitialized: true, danyApiReady: true, danyError: null, sandboxPath: path })
 		);
 		expect(json).not.toContain('AppData');
 		expect(json).not.toMatch(/[A-Za-z]:[\\/]/);
 	});
 
 	test('sandboxId is 12 lowercase hex chars and stable across calls', () => {
-		const first = publicBootstrap({ dbInitialized: true, danyApiReady: true, sandboxPath: path });
-		const second = publicBootstrap({ dbInitialized: true, danyApiReady: true, sandboxPath: path });
+		const first = publicBootstrap({ dbInitialized: true, danyApiReady: true, danyError: null, sandboxPath: path });
+		const second = publicBootstrap({ dbInitialized: true, danyApiReady: true, danyError: null, sandboxPath: path });
 		expect(first.sandboxId).toMatch(/^[0-9a-f]{12}$/);
 		expect(first.sandboxId).toBe(second.sandboxId);
 		expect(first.sandboxConfigured).toBe(true);
 	});
 
 	test('a different path yields a different id', () => {
-		const a = publicBootstrap({ dbInitialized: true, danyApiReady: true, sandboxPath: path });
-		const b = publicBootstrap({ dbInitialized: true, danyApiReady: true, sandboxPath: 'D:\\sandbox' });
+		const a = publicBootstrap({ dbInitialized: true, danyApiReady: true, danyError: null, sandboxPath: path });
+		const b = publicBootstrap({ dbInitialized: true, danyApiReady: true, danyError: null, sandboxPath: 'D:\\sandbox' });
 		expect(a.sandboxId).not.toBe(b.sandboxId);
+	});
+
+	test('a path-bearing danyError is redacted before it reaches the surface', () => {
+		const projected = publicBootstrap({
+			dbInitialized: true,
+			danyApiReady: false,
+			danyError: `DanyAPI clone failed: fatal: could not create work tree dir '${path}\\DanyAPI'`,
+			sandboxPath: path
+		});
+
+		const json = JSON.stringify(projected);
+		expect(json).not.toContain('AppData');
+		expect(json).not.toMatch(/[A-Za-z]:[\\/]/);
+		expect(projected.danyError).toContain('<path>');
+		expect(projected.danyError).toContain('DanyAPI clone failed');
+	});
+
+	test('a null danyError stays null', () => {
+		const projected = publicBootstrap({ dbInitialized: true, danyApiReady: true, danyError: null, sandboxPath: path });
+		expect(projected.danyError).toBe(null);
 	});
 });
 

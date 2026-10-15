@@ -2,10 +2,12 @@ import { spawnSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { initDatabase, repos } from '../db';
+import { assessDanyApi } from './ready';
 
 export interface BootstrapResult {
 	dbInitialized: boolean;
 	danyApiReady: boolean;
+	danyError: string | null;
 	sandboxPath: string;
 }
 
@@ -42,11 +44,15 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 
 	// 3. Setup DanyAPI (Docker container for self-contained LLMs) — dev only.
 	const danyDir = join(sandboxDir, 'DanyAPI');
-	let danyReady = false;
 	const danyRepo = 'https://github.com/mindflowgo/DanyAPI.git';
+	let danyReady = false;
+	let danyError: string | null = null;
 
 	if (dataDir) {
+		// Production deliberately skips the sandbox: no clone, no compose file.
+		// The honest report is "not ready", with the reason recorded.
 		console.log('[Bootstrap] Production run: skipping DanyAPI sandbox (local Docker provider disabled).');
+		danyError = 'Production run: DanyAPI sandbox is disabled (CONCLAVE_DATA_DIR is set).';
 	} else if (!existsSync(danyDir)) {
 		console.log(`[Bootstrap] Ingesting DanyAPI repository from ${danyRepo}...`);
 		try {
@@ -56,16 +62,16 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 			});
 			if (cloneResult.status === 0 && existsSync(danyDir)) {
 				console.log('[Bootstrap] Cloned DanyAPI successfully.');
-				danyReady = true;
 			} else {
-				console.warn(`[Bootstrap] Git clone failed or network unavailable (${cloneResult.stderr?.trim()}). Creating local sandbox stub.`);
+				const reason = cloneResult.stderr?.trim() || `git clone exited with status ${cloneResult.status}`;
+				console.warn(`[Bootstrap] Git clone failed or network unavailable (${reason}). Creating local sandbox stub.`);
+				danyError = `DanyAPI clone failed: ${reason}`;
 				mkdirSync(danyDir, { recursive: true });
-				danyReady = true;
 			}
 		} catch (err: any) {
 			console.warn(`[Bootstrap] Failed to clone ${danyRepo}: ${err.message}. Creating directory stub.`);
+			danyError = `DanyAPI clone failed: ${err.message}`;
 			mkdirSync(danyDir, { recursive: true });
-			danyReady = true;
 		}
 	} else {
 		console.log('[Bootstrap] DanyAPI exists. Pulling latest updates...');
@@ -75,7 +81,16 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 				console.log('[Bootstrap] DanyAPI updated.');
 			}
 		} catch {}
-		danyReady = true;
+	}
+
+	// Readiness is a property of what is on disk, not of which branch ran: a
+	// failed clone leaves a stub directory and a deleted fork leaves an empty
+	// one, so the clone status alone cannot answer it. Production skips the
+	// assessment because it skips the sandbox.
+	if (!dataDir) {
+		const assessment = assessDanyApi(sandboxDir);
+		danyReady = assessment.ready;
+		if (!danyReady && !danyError) danyError = assessment.error;
 	}
 
 	// Setup .env and docker-compose.yml for DanyAPI — dev only
@@ -112,6 +127,7 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 	return {
 		dbInitialized: true,
 		danyApiReady: danyReady,
+		danyError,
 		sandboxPath: sandboxDir
 	};
 }
