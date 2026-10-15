@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { harness } from '../stores/harness.svelte';
 	import { handleWindowDrag, handleShrinkWindow } from '../utils/drag';
-	import { PanelLeftOpen, Minimize2 } from 'lucide-svelte';
+	import { PanelLeftOpen, Minimize2 } from '@lucide/svelte';
 
 	const activeConv = $derived(harness.activeConversation);
 

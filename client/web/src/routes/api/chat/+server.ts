@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { env } from '$env/dynamic/private';
+import { BUN_ROUTER_URL } from '$app/env/private';
 
 /**
  * Bun Router Chat Endpoint
@@ -13,7 +13,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	// Check if an external Bun router endpoint is specified (e.g. BUN_ROUTER_URL or custom setting)
 	const customEndpoint =
-		env.BUN_ROUTER_URL ||
+		BUN_ROUTER_URL ||
 		(settings?.routerEndpoint && settings.routerEndpoint !== '/api/chat'
 			? settings.routerEndpoint
 			: null);

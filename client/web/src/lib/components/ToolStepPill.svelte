@@ -10,7 +10,7 @@
 		FileSearch,
 		Terminal,
 		ExternalLink
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	let { step }: { step: ToolStep } = $props();
 

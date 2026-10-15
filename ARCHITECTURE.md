@@ -100,7 +100,8 @@ Conclave/
 │   │   │   │   └── utils/       # Window drag utilities for macOS frameless overlay
 │   │   │   └── routes/          # SvelteKit routes: (desktop)/ (main window) & overlay/ (ambient HUD)
 │   │   ├── package.json
-│   │   └── svelte.config.js
+│   │   └── vite.config.ts       # Vite + SvelteKit plugin config + static adapter
+│   │                              # (svelte.config.js was removed in SvelteKit 3)
 │   │
 │   ├── tauri/                   # Tauri v2 native desktop shell
 │   │   ├── src-tauri/

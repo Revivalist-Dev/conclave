@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { harness } from '../stores/harness.svelte';
 	import ToolStepPill from './ToolStepPill.svelte';
-	import { Bot, FileText, Image as ImageIcon } from 'lucide-svelte';
+	import { Bot, FileText, Image as ImageIcon } from '@lucide/svelte';
 	import { marked } from 'marked';
 	import hljs from 'highlight.js';
 	import 'highlight.js/styles/github-dark.css';

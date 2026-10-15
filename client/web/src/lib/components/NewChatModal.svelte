@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { harness } from '../stores/harness.svelte';
-	import { Folder, X, CornerDownLeft, Sparkles } from 'lucide-svelte';
+	import { Folder, X, CornerDownLeft, Sparkles } from '@lucide/svelte';
 
 	let directoryInput = $state('');
 	let selectedGroup = $state('Discussions');

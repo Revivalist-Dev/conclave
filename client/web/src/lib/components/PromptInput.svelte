@@ -15,7 +15,7 @@
 		Image as ImageIcon,
 		X,
 		Loader2
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	let text = $state('');
 	let textareaEl = $state<HTMLTextAreaElement>();

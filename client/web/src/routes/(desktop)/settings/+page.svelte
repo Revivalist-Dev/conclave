@@ -22,7 +22,7 @@
 		Network,
 		Code,
 		Bot
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	// === Tab Selection ===
 	type SettingsTab = 'mcp' | 'general' | 'plugins' | 'engine';

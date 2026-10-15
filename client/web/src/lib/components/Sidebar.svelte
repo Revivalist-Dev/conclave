@@ -21,7 +21,7 @@
 		MoreVertical,
 		Pencil,
 		Download
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	let searchOpen = $state(false);
 	let isCreatingProject = $state(false);

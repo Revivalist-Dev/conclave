@@ -10,7 +10,7 @@
 		ExternalLink,
 		AlertCircle,
 		Sparkles
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 	import {
 		IDLE_HUD_WIDTH,
 		IDLE_HUD_HEIGHT,

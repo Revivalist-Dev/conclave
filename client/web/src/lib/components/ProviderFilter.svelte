@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { harness } from '../stores/harness.svelte';
-	import { Check, ChevronDown, ListFilter, Server } from 'lucide-svelte';
+	import { Check, ChevronDown, ListFilter, Server } from '@lucide/svelte';
 
 	let { variant = 'icon' }: { variant?: 'icon' | 'full' } = $props();
 

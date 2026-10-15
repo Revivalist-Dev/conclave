@@ -27,5 +27,5 @@ libc = "0.2"
 
 # Orchestrator WebSocket bridge (orchestrator_ws.rs)
 tokio = { version = "1", features = ["sync", "time", "macros"] }
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 futures-util = { version = "0.3", features = ["sink"] }
