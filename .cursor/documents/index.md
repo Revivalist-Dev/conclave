@@ -43,6 +43,11 @@ written relative to *this* directory, so nothing here breaks when a folder in th
 - [Hardening and upgrades](./hardening-upgrades.md) — the defect findings behind the plan's early
   phases: correctness, failure visibility, security and supply chain, observability, developer
   experience. Each carries evidence, a proposed change, an effort, and **how to test that it worked**.
+- [Wiring audit](./wiring-audit.md) — the cross-boundary class beside that page: strings, routes,
+  identifiers and payload shapes that two independently written ends disagree about, which no unit test
+  on either end can see. Nine boundary groups walked, the agreements recorded as well as the seven
+  mismatches, and the two leads (the duplicated `docker compose up -d`, the hardcoded bootstrap database
+  path) confirmed with evidence.
 
 ## Dependencies and the backend
 

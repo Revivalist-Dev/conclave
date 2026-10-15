@@ -1,7 +1,7 @@
 import { spawnSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { initDatabase, repos } from '../db';
+import { initDatabase, repos, DATA_DIR } from '../db';
 import { assessDanyApi } from './ready';
 
 export interface BootstrapResult {
@@ -17,7 +17,10 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 	// 1. Initialize SQLite database
 	try {
 		initDatabase();
-		console.log('[Bootstrap] SQLite database initialized at orchestrator/data/conclave.db');
+		// The path is DATA_DIR's, not a literal: in a production run CONCLAVE_DATA_DIR
+		// is set and the database is written there, so the hardcoded path this line
+		// used to print was false in exactly the case it mattered.
+		console.log(`[Bootstrap] SQLite database initialized at ${join(DATA_DIR, 'conclave.db')}`);
 	} catch (err: any) {
 		console.error(`[Bootstrap] SQLite initialization failed: ${err.message}`);
 	}
