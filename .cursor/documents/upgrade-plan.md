@@ -135,16 +135,35 @@ node .cursor/tools/project-docs.mjs --check   # must exit 0 - the project's doc 
   fails the gate rather than rotting.
 - **`project-docs --check`** fails when a page is added to this project but not mirrored, or when the
   generated map drifts. Run `--sync` to repair; never hand-edit the generated `index.md`.
-- **This project's pages are the project's.** They live in
-  `.agent-repositories/conclave/.cursor/documents/`, which is gitignored, so they are never committed
-  to the fork — and their links are written relative to the project, so renaming the project's folder
-  cannot break them.
+- **This project's pages are the project's, and they are tracked.** They live in
+  `.agent-repositories/conclave/.cursor/documents/` and are versioned with the code — `.gitignore`
+  excludes `.cursor/*` but re-includes `.cursor/documents/` (and `.cursor/README.md`), so they travel
+  with the fork; `git ls-files .cursor/documents` returns nine files. Their links are written relative
+  to the project, so renaming the project's folder cannot break them. *(Corrected 2026-10-15: this
+  bullet claimed the pages were gitignored. They had been, and D3 was the finding for that; the
+  directory was versioned at `6e257f5`, "Version the project wiki with the project", which retired D3
+  and left this paragraph behind.)*
 
 ## What to do first, concretely
 
-If the next session has one thing: **Phase 1's F2 and F3.** They are small, they are in the same file
-family, and they are the two items that corrupt the message log — which every later phase will read as
-evidence.
+If the next session has one thing: **Phase 1's F2 and F3 are done** (2026-10-15), and they were the two
+items that corrupt the message log — the one every later phase reads as evidence. What they left behind
+shapes what comes next:
+
+- The failure is now *marked* but not *rendered*. An errored assistant row carries `error = 1` and its
+  `last_response` is `⚠ Provider error`, and nothing in `client/` reads either yet, so the durable record
+  is honest and the UI still shows the notice as answer text. That rendering item is the natural
+  companion to F1, which is the same user-visible failure seen live.
+- **Neither fix has a regression test.** Both were proved by hand-run probes
+  (`orchestrator/probe-f2-stream.ts`, `orchestrator/probe-f3-persist.ts`) against a stub, and
+  `bun test` still exits 1 with `No tests found!`. Promoting those two probes into the suite is the
+  cheapest possible start on `D2`, and it makes the two fixes above permanent instead of reported.
+
+So the next concrete thing is **F1 (the client-side response deadline) with `message.error` rendered**,
+because between them they close the same failure — a broken turn that looks like a working one — at the
+live signal and in the history. Then the rest of Phase 1 in the ranking's own order:
+[§8 of hardening-upgrades.md](./hardening-upgrades.md) has the sequence, and F6 / F10 are two and three
+lines each.
 
 ## Related
 

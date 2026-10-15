@@ -16,6 +16,19 @@ The single external dependency this page leans on most is reviewed separately in
 [DanyAPI review](./danyapi-review.md); items marked **[D]** there are the Conclave-side half of a coupling
 finding.
 
+> **Read the quoted text, not the line number — the numbers here are unvalidated and some are wrong.**
+> Every citation was read at one point on 2026-10-15, and a line number is a claim about a file that can
+> move. A later audit of this page found **eight** refs whose content is present but whose number is off.
+> Of **five** of those checked directly against the tree, the audit was right **four** times and wrong
+> **once** — so neither this page nor an audit of it is authoritative. Verified examples: `formData.get('model')`
+> is at `orchestrator/src/index.ts:263`, cited here as `:277`; the `[DanyAPI] … tokens used` log is at
+> `orchestrator/src/providers/danyapi.ts:154`, cited as `:147`, which is a comment line; `newMessageId` is
+> at `orchestrator/src/db/helper.ts:65-69`, cited as `:70-74`.
+> **What to do instead:** search for the quoted string rather than trusting the number
+> (`rg -n "the quoted text" <file>`), which is the only form of citation that survives an edit. The
+> findings themselves were checked against the tree and reproduced; it is the addresses that drifted.
+> A page that says "at `595f786`, `.gitignore:32` was `.cursor/`" is pinned; a bare `:32` is not.
+
 ## 0. The four defect patterns this page hunts for
 
 Four shapes recur across the tree. They are named once here and tagged **[K1]**–**[K4]** on each item, so
@@ -337,6 +350,8 @@ retry. A `CHAT_TIMEOUT` broadcast from the orchestrator for its own 60 s `AbortC
 **How to test it worked.** Kill the orchestrator, send a prompt, and assert the send control returns to
 idle within the deadline with a visible failure on the message — not an indefinite spinner.
 
+**Fix.** Applied 2026-10-15 in `client/web`. The deadline is a new pure module, `client/web/src/lib/services/promptDeadline.ts` — a `PromptDeadline` class with injectable timers and a `start()` / `noteActivity()` / `clear()` surface, no Svelte runes and no DOM. Two constants, both derived from the provider adapter's own budget rather than guessed: `PROMPT_FIRST_TOKEN_TIMEOUT_MS = 90_000` and `PROMPT_IDLE_TIMEOUT_MS = 60_000`. `orchestrator/src/providers/danyapi.ts` aborts its upstream request with `setTimeout(() => controller.abort(), 60000)`, so a client deadline under 60 s would declare failure while the server still had budget to answer; 90 s is that 60 s plus a 30 s margin for connection setup, the native offline queue flushing, and event-loop lag. The idle budget equals the server's single 60 s window, because a full minute of silence mid-stream is a stuck stream rather than a slow token. The store (`client/web/src/lib/stores/harness.svelte.ts`) arms it in `sendMessage` **before either transport** — `this.pendingTurn = { tabId: conv.id, messageId: null }; this.promptDeadline.start();` immediately after `this.isGenerating = true` — and fills in `pendingTurn.messageId` when each branch pushes its placeholder, since `conv.messages.push(assistantMsg)` appears in both the WS and the HTTP branch. Two new public methods, `noteGenerationActivity()` and `endGeneration()`, are the only other entry points; expiry runs `expirePromptTurn`, which clears `isGenerating` and sets `error = true` on the guarded assistant message. **Every timer is cleared on the happy path too**, which is the trap this workspace has on record: the socket service's `CHAT_COMPLETE` and `CHAT_ERROR` cases and the HTTP fallback's `finally` all call `endGeneration()`, so the `finally` reset at the old line 874 is unchanged in effect and now clears the timer with it; `CHAT_TOKEN`, `TOOL_STEP_UPDATE` and `CHAT_USAGE` in `client/web/src/lib/services/orchestratorSocket.svelte.ts` call `noteGenerationActivity()`, which re-arms the idle budget and drops a stale failure flag if a queued prompt is flushed and answered after the deadline already fired; and a new send calls `start()`, which clears any pending handle first. The `error` flag now reaches the client: the server column is `error INTEGER NOT NULL DEFAULT 0` and the read path is `SELECT *` (F3), so the integer arrives on the row, and `handleTabDetail` — the single mapping site for both transports, `TAB_DETAIL` over WS and `GET /api/tabs/:id/messages` — now coerces with `error: m.error === 1 || m.error === true`; `Message` in `client/web/src/lib/types.ts` gained `error?: boolean`. `client/web/src/lib/components/ConversationView.svelte` renders an assistant message with `error === true` as a small `⚠ Response failed — no usable answer was returned.` banner in the existing Tailwind idiom (`bg-red-950/40 border-red-900/60 text-red-300`), placed above the content block, with the typing-dots branch guarded by `!message.error` so an expired placeholder shows the failure instead of three bouncing dots; nothing was restyled, and **this closes F3's "nothing in `client/` reads the flag" caveat** (noted on F3 below). **Retry is explicitly not implemented** — the client has no resend affordance anywhere (`retry`, `resend` and `regenerate` have no symbol in `client/web/src`) and the brief forbade inventing a new UI pattern. `CHAT_TIMEOUT` was not added and `orchestrator/` was not touched, so the broadcast half of the Proposed change above remains open. Proved with `bun test` — the first test file in the tree — at `client/web/tests/promptDeadline.test.ts`: five cases for first-token arming and expiry, the swap to the idle budget with the earlier timer cleared, `clear()` leaving zero pending timers, re-arm on a new send, and no re-arm after expiry. It sits in `tests/` rather than beside the module because `tsconfig.json` includes `["src", "test", "*"]`, so a `*.test.ts` under `src/` would pull `bun:test` into `svelte-check` and fail unless `@types/bun` were added. Gates, all run from `client/web`: `bun run check` → `svelte-check found 0 errors and 6 warnings in 5 files`, exit **0**, identical to the pre-change run (0 errors, 6 warnings, exit 0); `bun run build` → exit **0**; `bun test` → 5 pass, 0 fail, exit **0**. The one new diagnostic the test file did produce was `Cannot find module 'bun:test'` while it lived under `src/`, which is what moved it. **The 90 s budget is confirmed, not provisional:** the Proposed change above suggests 30 s to first token; the operator was asked directly on 2026-10-15 and chose to keep 90 s, so the constants should not be "corrected" back toward the proposal without asking again.
+
 ### F2 — A malformed stream chunk is discarded, so a broken stream looks like a short answer **[K1]**
 
 **Finding.** Every line-level parse failure in the SSE reader is swallowed except one specific error string.
@@ -360,6 +375,8 @@ severity.
 **How to test it worked.** Point the provider at a stub that emits `data: {not json}` followed by
 `data: [DONE]` and assert the router surfaces an error rather than saving an empty assistant message.
 
+**Fix.** Applied 2026-10-15 in `orchestrator/src/providers/danyapi.ts`. The `DeepSeek error:` rethrow is unchanged. A malformed `data:` line now increments `discardedLines` and warns with the raw line (`[DanyAPI] Discarded malformed stream line N: <line>`); the reader now also counts `usableChunks` (incremented at both yield sites) and tracks `sawTerminator`, and throws when `usableChunks === 0 && (discardedLines > 0 || !sawTerminator)`, naming the provider, the endpoint and that nothing parsed. **One deliberate deviation from the brief:** a stream whose only content is `data: [DONE]` (0 discarded, terminator seen) is left as an empty success rather than converted to a failure — a clean terminator is the signal that separates a legitimate empty completion from a truncation, and the brief's "no usable chunk and no error means failure" as written makes those two indistinguishable. Proved with `bun orchestrator/probe-f2-stream.ts <case>` against a stub bound to the provider's hardcoded `127.0.0.1:8000/v1`: `malformed` warns and throws, `truncated` throws, and `doneOnly` / `clean` / `cleanNoUsage` / `deepseekError` are identical to the pre-fix module. The throw reaches the router's `catch`, which yields a `type: 'error'` event; the "rather than saving an empty assistant message" half of the test above belongs to **F3**, which landed the same day — the router now flags the row and writes a failure marker to `last_response`, while the message `content` still carries the notice to any reader that ignores the flag.
+
 ### F3 — A provider failure is saved as a successful message
 
 **Finding.** On a provider error the router appends the error text as a **token**, still yields
@@ -381,6 +398,33 @@ tab's `last_response` to a short failure marker; keep the `CHAT_ERROR` path as t
 
 **How to test it worked.** Stop the DanyAPI container, send a prompt, then `GET /api/tabs/:id/messages`
 and assert the assistant row is flagged as an error and `tabs.last_response` is not the error text.
+
+**Fix.** Applied 2026-10-15. `messages` now carries `error INTEGER NOT NULL DEFAULT 0`, declared in
+`orchestrator/src/db/schema.ts` (mirrored in `schema.sql`, which the module header says stays in sync) and
+added to a database that predates it by a second guarded `ALTER TABLE` beside the `tabs.archived`
+precedent in `initDatabase()` (`orchestrator/src/db/index.ts`). `repos.addMessage` takes an optional
+trailing `opts?: { error?: boolean }`, INSERTs the flag and returns it, so every existing positional caller
+is unchanged. The read path needed no edit: all three `getTabMessages` queries are `SELECT *`, so the
+column reaches the client in the row shape automatically. The router's provider-failure path now sets
+`providerError`, persists the assistant row with `{ error: true }`, and sets `last_response` to the marker
+`⚠ Provider error` instead of the error text; the live `{ type: 'error' }` yield and its `CHAT_ERROR`
+handling are untouched. The row's `content` is still the error notice, now flagged rather than disguised:
+rendering an errored row in the history was a separate, later item — **closed the same day by F1's fix**,
+which added `error` to the client `Message` type and a failure banner to `ConversationView.svelte` — and
+`client/` was not touched by this change. Proved
+with `bun orchestrator/probe-f3-persist.ts`, which pre-seeds a database with the pre-fix `messages` table
+(no `error` column) and one historical row, binds a stub to the provider's hardcoded
+`127.0.0.1:8000/v1`, and drives the router twice. `case=migration` shows the column appended and the
+historical row defaulted to `0`; `case=fail` (HTTP 500) yields `events=["token","error","complete"]` with
+`assistantRow.error=1`, `assistantRow.content="> **DanyAPI Error**: upstream exploded"` and
+`tabLastResponse="⚠ Provider error"`; `case=ok` yields `error=0` with `content="Hello world"` and
+`tabLastResponse="Hello world"`, so the flag is not stuck on. `orchestrator/data/conclave.db` is untouched —
+it does not exist, and `CONCLAVE_DATA_DIR` points at `%TEMP%`. Neither `package.json` offers a typecheck or
+lint script: `orchestrator` declares only `test: bun test`, which exits **1** with `No tests found!`
+because the tree has zero test files (D2). A `tsc --noEmit` over `orchestrator/src/index.ts` using the
+vendored TypeScript 6.0.3 in `client/web/node_modules` reports the same **64** pre-existing diagnostics
+before and after the change (exit **2** in both), the only difference being a one-line shift in
+`router/index.ts`; `bun build src/index.ts --target=bun` exits **0**.
 
 ### F4 — A failed `git pull` of the provider is invisible **[K1]**
 
@@ -829,6 +873,17 @@ deliberately broken.
 
 ### D3 — The wiki lives in a gitignored directory
 
+> **Line drift, 2026-10-15 — this citation was correct when written.** At commit `595f786`,
+> `.gitignore:32` **was** exactly `.cursor/`. Commit `6e257f5` (the one that versioned this project's own
+> documentation, hours later) replaced that rule with `.cursor/*` at line 35 and pushed the old line down
+> behind a five-line comment. A verifier re-reading this page the same day therefore reported the evidence
+> as unreproducible. The finding stands; only the line number moved.
+> **The general shape, which is worth more than the correction:** a `file:line` citation is a claim about a
+> file that can move, and nothing in this workspace detects the drift. A verifier who trusts the citation
+> calls a correct finding wrong; one who distrusts it re-derives everything by hand. Either pin the
+> evidence to a commit — "at `595f786`, `.gitignore:32`" — or cite a symbol and a search rather than a
+> line, so the claim survives an edit it did not know about.
+
 **Evidence.** `.gitignore:32` is `.cursor/`, and `git check-ignore -v .cursor/documents/conclave.md` resolves
 to that rule. Every documentation artefact — `conclave.md`, `conclave-dependency-audit.md`,
 `mcp-roadmap.md`, this page and its sibling — is therefore untracked and unversioned, in the repository
@@ -1009,14 +1064,14 @@ effort is S/M/L as estimated above.
 | 7 | **C2** — make `danyApiReady` mean something | **[K1]** | S | High | Removes the first of two stacked lies about the provider |
 | 8 | **C3** — verify before claiming `running` | **[K1]** | S | High | Removes the second; together with C2 the engine indicator becomes truthful |
 | 9 | **F1** — client-side response deadline | **[K1]** | S | High | The most user-visible failure on the page: an indefinite spinner |
-| 10 | **F2** — stop discarding malformed stream lines | **[K1]** | S | High | A truncated answer currently looks like a complete one |
+| 10 | **F2** — stop discarding malformed stream lines | **[K1]** | S | High | A truncated answer currently looks like a complete one — **done 2026-10-15** |
 | 11 | **C5** — separator-aware path confinement | **[K1]** | S | High | A security control that reads as present and is not; the test is two paths |
 | 12 | **C8** — cap uploads, uniquify names | — | S | Medium | Data loss on a repeated filename, and unbounded disk on a large body |
 | 13 | **C9** — stop rewriting the upload model | — | S | Medium | One line; the correct behaviour already exists in the adapter |
 | 14 | **C7** — collision-proof ids | — | S | Medium | Low probability, total failure when it fires, and `nextSeq` already exists |
 | 15 | **S6** — delete the duplicate lockfile, add a drift check | **[K3]** | S | High | Nine lines of script retires a whole failure class, and two resolvers for one manifest is a live hazard |
 | 16 | **S7** — declare the toolchain floor | **[K4]** | S | Medium | Cheap, and it is the one unpinned thing that is entirely under this repo's control |
-| 17 | **D3** — make the wiki tracked | — | S | Medium | The deliverables are unversioned for no reason |
+| 17 | **D3** — make the wiki tracked | — | S | Medium | The deliverables are unversioned for no reason — **done at `6e257f5`** |
 | 18 | **D2** — start the test suite with five cheap cases | — | M | High | The tree with a hand-written JSON-RPC dispatcher has zero tests; `bun test` is built in |
 | 19 | **O1** — structured logger | — | S | Medium | Unblocks O4 and makes every later fix diagnosable |
 | 20 | **O2** — capability-level readiness | — | S | High | The only check that would have caught every coupling risk in [the review](./danyapi-review.md) §6 |
@@ -1025,7 +1080,7 @@ effort is S/M/L as estimated above.
 | 23 | **F7** — 404 is not healthy | — | S | Medium | Prevents a plugin from advertising tools that cannot answer |
 | 24 | **F8** — timeout `callMcp` | — | S | Medium | A leaked map and a promise that never settles; the server-side client already solves it |
 | 25 | **F9** — handle the `startAll` promise | — | S | Low | Correctness of a boot path, one line |
-| 26 | **F3** — flag an errored assistant message | — | S | Medium | Keeps the durable record honest |
+| 26 | **F3** — flag an errored assistant message | — | S | Medium | Keeps the durable record honest — **done 2026-10-15** |
 | 27 | **C4** — validate MCP arguments against the schema | **[K2]** | M | High | The advertised contract becomes enforceable, and the failure shape already exists |
 | 28 | **S1** — pin the provider supply chain | **[K4]** | M | High | Three moving references currently decide what code runs in the container |
 | 29 | **D4** — remove or route the dead paths | — | S | Medium | Four files that read as capability and are not |
