@@ -80,7 +80,7 @@
 </script>
 
 <WindowFrame>
-	<!-- Left Sidebar with macOS controls & Settings at bottom -->
+	<!-- Left Sidebar with window controls & Settings at bottom -->
 	<Sidebar />
 
 	<!-- Main Area beside the sidebar -->

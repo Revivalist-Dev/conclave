@@ -22,7 +22,7 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-family: "Segoe UI", Roboto, sans-serif;
   letter-spacing: -0.011em;
   user-select: none;
 }

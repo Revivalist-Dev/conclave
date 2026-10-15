@@ -32,10 +32,21 @@
 	type McpPathMode = 'app' | 'dev';
 	let mcpPathMode = $state<McpPathMode>('app');
 
-	const PROD_MCP_BIN = '/Applications/Conclave.app/Contents/MacOS/conclave-mcp';
-	const DEV_MCP_SCRIPT = '/Users/fil/Code/Conclave/orchestrator/bin/mcp-server.js';
+	// This build targets Windows and Linux only. The stdio bridge ships beside
+	// the Conclave executable (production) or in the repo checkout (development);
+	// the client cannot discover either absolute path at runtime, so the install
+	// folder stays a placeholder the user fills in.
+	const isWindows =
+		typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
 
-	const activeMcpPath = $derived(mcpPathMode === 'app' ? PROD_MCP_BIN : DEV_MCP_SCRIPT);
+	const PROD_MCP_BIN = `<Conclave install folder>/${isWindows ? 'conclave-mcp.exe' : 'conclave-mcp'}`;
+	const DEV_MCP_SCRIPT = '<Conclave repo>/orchestrator/bin/mcp-server.js';
+
+	const CLAUDE_CONFIG_PATH = isWindows
+		? '%APPDATA%\\Claude\\claude_desktop_config.json'
+		: '~/.config/Claude/claude_desktop_config.json';
+
+	const CURSOR_MCP_PATH = isWindows ? '%USERPROFILE%\\.cursor\\mcp.json' : '~/.cursor/mcp.json';
 
 	const activeRunCommand = $derived(
 		mcpPathMode === 'app' ? PROD_MCP_BIN : `node ${DEV_MCP_SCRIPT}`
@@ -319,9 +330,9 @@ ${mcpConfigJson}`
 								class="px-2.5 py-1 rounded-md transition-colors cursor-pointer {mcpPathMode === 'app'
 									? 'bg-zinc-800 text-cyan-300 font-semibold shadow-sm'
 									: 'text-zinc-500 hover:text-zinc-300'}"
-								title="Slim native proxy (~500KB) bundled inside .app — passes logic off to orchestrator (no Node.js required)"
+								title="Slim native proxy (~500KB) bundled inside the app folder — passes logic off to orchestrator (no Node.js required)"
 							>
-								Production (.app)
+								Production (bundled)
 							</button>
 							<button
 								type="button"
@@ -377,21 +388,21 @@ ${mcpConfigJson}`
 							</span>
 							<button
 								type="button"
-								onclick={() => copyText('open -e ~/Library/Application\\ Support/Claude/claude_desktop_config.json', 'claude')}
+								onclick={() => copyText(CLAUDE_CONFIG_PATH, 'claude')}
 								class="text-[10px] text-zinc-400 hover:text-cyan-300 flex items-center gap-1 font-mono transition-colors cursor-pointer"
-								title="Copy terminal command to open file"
+								title="Copy configuration file path"
 							>
 								{#if copiedClaudeCmd}
 									<Check class="w-3 h-3 text-emerald-400" />
-									<span class="text-emerald-300">Copied cmd</span>
+									<span class="text-emerald-300">Copied path</span>
 								{:else}
 									<Copy class="w-3 h-3" />
-									<span>open file</span>
+									<span>copy path</span>
 								{/if}
 							</button>
 						</div>
 						<div class="p-2 rounded bg-zinc-900 border border-zinc-800/80 font-mono text-[10px] text-zinc-400 break-all select-all">
-							~/Library/Application Support/Claude/claude_desktop_config.json
+							{CLAUDE_CONFIG_PATH}
 						</div>
 						<p class="text-[10px] text-zinc-500">
 							Paste the JSON block into <code class="text-zinc-400">mcpServers</code> and restart Claude Desktop.
@@ -408,7 +419,7 @@ ${mcpConfigJson}`
 							<span class="text-[10px] text-zinc-500 font-mono">Settings &gt; Features &gt; MCP</span>
 						</div>
 						<div class="p-2 rounded bg-zinc-900 border border-zinc-800/80 font-mono text-[10px] text-zinc-400 break-all select-all">
-							~/.cursor/mcp.json
+							{CURSOR_MCP_PATH}
 						</div>
 						<p class="text-[10px] text-zinc-500">
 							{#if mcpPathMode === 'app'}

@@ -103,10 +103,6 @@ function getAppDataBaseDirectory() {
         return process.env.APPDATA || '';
     }
 
-    if (process.platform === 'darwin') {
-        return path.join(os.homedir(), 'Library', 'Application Support');
-    }
-
     return path.join(os.homedir(), '.config');
 }
 

@@ -190,7 +190,7 @@ The application features an ultra-lightweight, transparent desktop overlay mode 
   * **Automatic Small Size Restoration**: Dismissing the error guarantees the window resizes back to the compact idle HUD size (`200×56` px).
 
 ### 6.2 Overlay Chrome & Controls
-* **Drag Region**: Entire overlay container acts as a native macOS window drag region (`data-tauri-drag-region`), with redundant JS mouse handlers removed to eliminate OS drag conflicts.
+* **Drag Region**: Entire overlay container acts as a native window drag region (`data-tauri-drag-region`), with redundant JS mouse handlers removed to eliminate OS drag conflicts.
 * **Chrome Cluster**:
   * Top-Right: `[ ⋮ Menu ]` offering **Restore Full Window** and **Quit Conclave**.
   * **Quit Action**: Calls native `exit_app` to terminate the full application process cleanly (preventing zombie background processes).
